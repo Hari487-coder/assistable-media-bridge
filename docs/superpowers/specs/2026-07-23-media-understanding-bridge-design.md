@@ -1,6 +1,6 @@
-# Media Understanding Bridge — Design Spec
+# Media MCP — Media Understanding for Assistable (Design Spec)
 
-**Date:** 2026-07-23
+**Date:** 2026-07-23 (rev 2 — MCP-first architecture, replaces the GHL-marketplace-app hybrid)
 **Status:** Approved pending spike gate (SPIKE-1)
 **Owner:** Hari
 **Project dir:** `Case Study/assistable-media-bridge`
@@ -11,185 +11,189 @@ Assistable assistants cannot understand non-text messages. Verified in platform 
 
 - Media-only inbound messages (image/PDF/voice note, no caption) are silently dropped
   before the AI runs — `enrich.worker.ts:479` (`empty_inbound_body` filter) and
-  `agent-run.ts:468` (null-content filter). The assistant is never invoked; the
-  conversation "breaks" and requires human intervention.
-- Attachment URLs ARE persisted (`ingest.worker.ts` `normalizeAttachments`) but no
-  consumer reads them; mimeType is discarded.
-- No vision, OCR, PDF, or STT capability exists anywhere in the assistant path.
+  `agent-run.ts:468` (null-content filter). The assistant is never invoked.
+- The drop happens BEFORE the `message.received` outbound webhook emission
+  (`enrich.worker.ts:1222`), so platform webhooks never fire for media-only
+  messages either — and their payload carries no attachments regardless.
+- Attachment URLs ARE persisted on the Message row (`ingest.worker.ts`
+  `normalizeAttachments`) but no consumer reads them; no v3 read route exposes
+  them (`MESSAGE_SELECT` omits `attachments`).
+- GHL attachment URLs go stale (documented in `call-events.ts:2487` — 403/dead
+  links); any design must fetch a fresh URL at processing time.
 
-The native fix is "in development" with no public ETA. This product is a standalone
-bridge that closes the gap without any Assistable platform change.
+The native fix is "in development" with no public ETA.
 
 ## Constraints (hard, from owner)
 
-1. Fully self-serve portal pattern (like the live-KB portal): customer creates an
-   account and connects things themselves; nothing operated per-customer.
-2. **Strict BYO AI key** (decided 2026-07-22): customer pastes their own
-   Gemini/OpenAI/Anthropic key. No credit pool, no platform-held provider costs.
-   Accepted consequence: key-minting is the funnel bottleneck → invest in a guided
-   key-creation flow in the portal.
-3. Setup = a few clicks; more reliable than any manual token/workflow configuration.
+1. Fully self-serve portal pattern (like the live-KB portal); nothing operated
+   per-customer.
+2. **Strict BYO AI key** (decided 2026-07-22). Guided key-creation flow in the
+   portal is the mitigation for key-minting friction.
+3. Setup = a few clicks / pastes; more reliable than manual workflow configuration.
 4. All media types: images (OCR/understanding), PDFs, voice notes/audio.
 5. No Assistable platform changes required.
-6. Media-only messages (no caption) are the #1 broken case and MUST work.
+6. Media-only messages (no caption) MUST work.
+7. **MCP is the product's interface** (owner directive 2026-07-23): the service IS
+   an MCP server; it must plug directly into Assistable's announced native MCP
+   support the day that ships.
 
-## Architecture (council-reviewed 2026-07-22, hybrid recommendation)
+## The physics (why a watcher exists)
 
-**Detect via GHL Marketplace app; process with the customer's key; inject via
-Assistable's own v3 API. No fabricated GHL messages.**
+MCP is a pull protocol: servers are called, they do not observe. Nothing in MCP
+can detect an inbound WhatsApp message — and the natural caller (the assistant)
+is exactly what never wakes on media-only messages. Therefore the product is an
+MCP server (permanent interface) plus a **detection watcher** (temporary shim
+that MCP-the-protocol cannot provide). When native assistant↔MCP support ships,
+the watcher retires per tenant; the MCP server graduates into the native feature.
+
+## Architecture
 
 ```
-Contact sends voice note/image/PDF on WhatsApp/SMS/FB/IG
+Contact sends voice note/image/PDF (WhatsApp/SMS/FB/IG)
         │
         ▼
-GHL fires InboundMessage webhook ──► Bridge service (marketplace app subscription)
-        │                                   │ (Assistable's own webhook fires in
-        │                                   │  parallel; its pipeline persists the
-        │                                   │  message row, then drops media-only
-        │                                   │  from enrich — unchanged)
-        │                                   ▼
-        │                        has attachment? no → ignore (loop-safe)
-        │                                   │ yes
-        │                                   ▼
-        │                        download from GHL CDN (allowlisted domains,
-        │                        size caps, magic-byte sniff)
-        │                                   ▼
-        │                        route by type on the TENANT'S key:
-        │                          audio → transcribe · image → vision/OCR
-        │                          · PDF → extract (+vision fallback for scans)
-        │                                   ▼
-        │                        resolve Assistable conversation by
-        │                        ghlConversationId (v3 API, retry w/ backoff —
-        │                        Assistable's ingest batching may lag seconds)
-        │                                   ▼
-        │                        POST /v3/chat/completions
-        │                          { assistant_id, conversation_id,
-        │                            additional_instructions:
-        │                              "<marker> The contact just sent a
-        │                               voice note. Transcript: …" }
-        │                                   ▼
-        └────────────► executeAgentRun (verified in source, chat.ts:72):
-                       full normal pipeline — reply-channel resolution,
-                       human-takeover + sleep-window checks, AI-replying
-                       state, billing, tracing — sends the reply to the
-                       contact through the standard outbound path.
+GHL webhook → Assistable ingest persists Message row
+  (content=null, attachments[], conversation row created)   [unchanged platform]
+  enrich drops it (empty_inbound_body) — assistant never wakes [the bug]
+        │
+        ▼
+┌─ Media MCP service (one hosted app, Render) ─────────────────────────────┐
+│                                                                          │
+│  WATCHER (per tenant, ~20–30s cycle, tenant's v3 API key):               │
+│    poll GET /v3/conversations?sort=newest → changed conversations        │
+│    → list messages (v3) → inbound USER + empty content = media signature │
+│    → fetch message via GHL API (tenant PIT) for FRESH attachment URL     │
+│    → download (allowlisted domains, size caps, magic-byte sniff)         │
+│    → route on tenant's BYO key:                                          │
+│        audio → transcribe · image → vision/OCR · PDF → extract           │
+│    → POST /v3/chat/completions { assistant_id, conversation_id,          │
+│        additional_instructions: "<marker> transcript…" }                 │
+│      → executeAgentRun (chat.ts:72): FULL normal pipeline — reply        │
+│        channel, human-takeover + sleep-window checks, billing, tracing — │
+│        sends the reply to the contact                                    │
+│    → optional (SPIKE-3): POST /v3/messages (source API) to persist the   │
+│      transcript into history for follow-up turns                         │
+│                                                                          │
+│  MCP SERVER (Streamable HTTP, same service):                             │
+│    tools: transcribe_audio · analyze_image · read_document ·             │
+│           analyze_attachment · connect_location · status                 │
+│    callable TODAY from: Assistable workflow-builder MCP node (native     │
+│    MCP client, verified in v2 source), Claude, Cursor, any MCP client    │
+│    callable TOMORROW from: assistants natively, when the platform's      │
+│    announced MCP feature ships → watcher retires per tenant              │
+└──────────────────────────────────────────────────────────────────────────┘
 ```
 
-### Why v3 injection beats GHL inbound-injection (council blind-spot finding)
+### What was rejected and why (decision log)
 
-- Zero synthetic GHL events: no phantom "Customer Replied" automations, no SLA/drip
-  side effects, no CRM history pollution, no per-message rebilling of fake messages.
-- No dependency on the unvalidated `POST /conversations/messages/inbound` +
-  marketplace-token question, and no marketplace-review policy risk from
-  fabricating contact-attributed messages (the app only *reads* webhooks).
-- Inherits Assistable's own safety rails for free (takeover, sleep windows).
+- **GHL Marketplace app (rev 1)** — cut: marketplace review friction, OAuth infra,
+  and the unvalidated inbound-injection question, all replaced by v3 polling
+  detection. No GHL app, no GHL workflows, no webhooks.
+- **GHL inbound-message injection** — cut (council, 2026-07-22): fabricated
+  contact-attributed messages fire phantom "Customer Replied" automations,
+  double-reply on captioned media, pollute CRM history, and carry marketplace
+  policy risk. The v3 `additional_instructions` seam has none of these.
+- **Assistable outbound webhook → workflow trigger** — dead: `message.received`
+  is emitted after the empty-body drop; media-only messages never fire it.
+- **Assistable Custom Tool** — dead: media-only messages never wake the AI;
+  Direct-Request execution needs a platform DB flip.
+- **Workflow-builder-only solution** — dead as primary: workflow triggers are
+  WEBHOOK/MANUAL/SCHEDULE only (no message trigger). The workflow MCP node
+  remains a supported *consumer* of our MCP server for custom automations.
 
-### Fallback (flagged, not default)
+## Onboarding (portal, live-KB pattern)
 
-GHL inbound-injection ("🎤 [Voice note]: …" posted as inbound message) is a
-designed-but-NOT-built fallback: the pipeline keeps an injection-strategy seam so
-it can be added behind a config flag, but it is only built if SPIKE-1 kills the
-v3 seam.
-If ever enabled it MUST ship with a caption-skip policy and explicit
-automation-hazard warnings at onboarding. It is also the seam a future
-non-Assistable-bot mode would use (explicit non-goal for now).
+Three pastes, each validated with a live call before accept:
 
-## Components
+1. **Assistable v3 API key** (watcher + injection)
+2. **AI provider key** — Gemini default (one key: audio+vision+PDF, free tier),
+   OpenAI supported (vision + Whisper), Anthropic image/PDF-only (portal marks
+   audio unsupported). Guided key-creation walkthrough per provider.
+3. **GHL Private Integration Token** — read-only conversation scopes, exact
+   checkbox checklist shown; used ONLY to fetch fresh media URLs/bytes.
+   No workflow creation. (Drops to two pastes if the platform ever adds
+   `attachments` to the v3 message serializer — a one-line `MESSAGE_SELECT`
+   change worth requesting; see Platform asks.)
 
-1. **GHL Marketplace app (unlisted)** — OAuth install (pick location, authorize),
-   webhook subscription to InboundMessage. Token store + refresh handling.
-2. **Webhook receiver** — per-tenant endpoint; verifies source; ACK-then-process
-   async; dedup on GHL message ID (in-store TTL set).
-3. **Media pipeline** — download (SSRF-guarded to GHL CDN domains, size caps:
-   25 MB audio/PDF, 10 MB image), magic-byte type sniff (never trust extension),
-   route to provider adapter. First 3 attachments per message, rest noted.
-4. **Provider adapters** (interface `describe(media) → text`):
-   - **Gemini** (recommended default: one key covers audio + vision + PDF, free tier)
-   - **OpenAI** (vision + Whisper)
-   - **Anthropic** (image/PDF only — portal marks audio unsupported on this choice)
-5. **Injection client** — v3 API: conversation lookup by ghlConversationId with
-   retry/backoff (5 tries / 60 s — ingest batching lag), then chat/completions with
-   the transcript in `additional_instructions`, prefixed with a fixed marker string
-   (sunset/idempotency identifier).
-6. **Portal** (live-KB pattern) — signup → "Install GHL app" button (OAuth) →
-   paste Assistable v3 API key (validated live) → paste AI provider key (validated
-   with a real test call) → guided key-creation walkthrough (screenshots, per
-   provider) → per-location toggles (modalities, enable/disable = kill switch) →
-   health panel: last event received, last processed, last error, key status.
-7. **Tenant store** — SQLite; per-location row; all tokens/keys AES-256-GCM
-   encrypted at rest, master key in env; never logged.
+Per-location controls: modality toggles, enable/disable (kill switch), health
+panel (last poll, last detection, last injection, last error, key status).
 
 ## Key behaviors & policies
 
-- **Scope (MVP):** media-only messages (empty body + attachments). Captioned media
-  is explicitly OUT for MVP: Assistable already replies to the caption text, and a
-  second completion would double-reply. Captioned-media enrichment is a documented
-  follow-up (depends on persisting the transcript into history — see SPIKE-3).
-- **Failure fallback:** provider error / unsupported type / oversize → inject a
-  completion instructing the assistant to acknowledge an unreadable attachment
-  (per-tenant toggle, default on). Failure must never silently reproduce the
-  original drop bug.
-- **Health over silence:** every processed/failed event is visible in the portal
-  health panel. Onboarding validates both keys with live calls. Key-dead and
-  rate-limited states are surfaced, not swallowed.
-- **Privacy:** attachments processed in memory only; no attachment bytes or
-  transcripts persisted by the bridge; transcripts exist only inside Assistable's
-  normal conversation flow. No media content in logs.
-- **Sunset:** fixed marker in every injected `additional_instructions`; per-location
-  kill switch; global kill switch. When Assistable ships native media support,
-  disable per location in one click. (Owner action: get the native feature's real
-  ETA from the platform team — sizes this bridge's lifespan.)
-- **Billing note (documented to customers):** media replies draw the customer's
-  Assistable wallet like any AI reply (they were previously free because broken),
-  plus their own provider costs on their key.
+- **Scope (MVP):** media-only messages (empty content + attachments). Captioned
+  media stays OUT (Assistable already answers the caption; enrichment for
+  captioned media is a follow-up gated on SPIKE-3 history persistence).
+- **Latency budget:** poll interval + processing ≈ reply in under ~1 minute.
+  Acceptable for async messaging (today's behavior is no reply, ever).
+  Tighten later via adaptive polling (hot conversations polled faster).
+- **Failure fallback (per-tenant toggle, default on):** provider error /
+  unsupported type / oversize / stale URL → inject a completion instructing the
+  assistant to acknowledge an unreadable attachment. Never silently reproduce
+  the original drop bug.
+- **Idempotency:** processed-message ID set (TTL) so restarts/re-polls never
+  double-inject; the `additional_instructions` marker doubles as the audit tag.
+- **Privacy:** attachments processed in memory only; no bytes or transcripts
+  persisted by the service; no media content in logs; keys/PITs AES-256-GCM
+  encrypted at rest (master key in env).
+- **Billing note (documented):** media replies draw the customer's Assistable
+  wallet like any AI reply + their own provider costs.
+- **Rate-limit citizenship:** poll cadence tuned to v3RateLimit budget
+  (measured in SPIKE-2); conversation-list poll is 1 req/cycle, message fetches
+  only for changed conversations.
 
 ## Spike gate (build nothing else first)
 
-- **SPIKE-1 (go/no-go, ~half day):** dev subaccount, real WhatsApp voice note →
-  confirm webhook payload attachment URL is downloadable (which token, expiry) →
-  `POST /v3/chat/completions` with `conversation_id` + fake transcript in
+- **SPIKE-1 (go/no-go, ~half day, all Assistable-side):** dev subaccount, real
+  WhatsApp voice note →
+  (a) v3 poll shows the conversation bump + empty-content inbound row (measure
+  ingest lag); (b) GHL message fetch via PIT returns a downloadable attachment
+  URL; (c) `POST /v3/chat/completions` with a fake transcript in
   `additional_instructions` → **assistant's reply arrives on the phone.**
-  Success criterion is the end-to-end reply, not a 200.
-- **SPIKE-2:** conversation lookup — resolve Assistable `conversation_id` from the
-  webhook's ghlConversationId via v3 API; measure ingest lag for a brand-new
-  contact's first-ever (media-only) message.
-- **SPIKE-3:** `createMessage` write semantics — can the transcript be persisted
-  into history (source USER) without triggering sends? Unlocks follow-up-turn
-  context and the captioned-media follow-up. Not MVP-blocking.
+  Success criterion = the reply, not a 200.
+- **SPIKE-2:** polling cadence vs v3 rate limits; detection latency distribution.
+- **SPIKE-3 (not MVP-blocking):** do `POST /v3/messages` (source API) rows enter
+  the agent's LLM context on later runs? Unlocks follow-up-turn context and
+  captioned-media enrichment.
 
 ## MVP cut
 
 WhatsApp voice notes + images, media-only case, Gemini + OpenAI adapters,
-unlisted marketplace app, portal with guided key flow, Render deploy.
-Fast follows: PDFs, Anthropic adapter, SMS/FB/IG verification (config, not
-architecture), SPIKE-3-gated history persistence.
+portal with guided key flows + health panel, MCP server surface (media tools),
+Render deploy. Fast follows: PDFs, Anthropic adapter, SMS/FB/IG verification,
+SPIKE-3-gated history persistence, adaptive polling.
 
-## Non-goals (explicit)
+## Platform asks (nice-to-have, never dependencies)
 
-- Structured extraction to CRM fields (design injection payload so it's a config
-  flip later; do not build).
-- Serving non-Assistable bots / public marketplace listing / ecosystem play
-  (channel-conflict risk — needs a business decision, not an engineering one).
-- Credit pool / managed keys (owner decided strict BYO).
-- Modifying anything in the Assistable platform repos.
+1. `attachments` in the v3 message serializer (one line) → kills the PIT paste.
+2. Native media feature ETA (sizes this product's lifespan).
+3. When native assistant↔MCP ships: connect our server as a first-class media
+   toolset (the graduation path).
+
+## Non-goals
+
+- Structured extraction to CRM fields (payload designed so it's a config flip
+  later; not built).
+- Serving non-Assistable bots; public ecosystem listing.
+- Credit pool / managed keys (strict BYO stands).
+- Any Assistable platform-repo changes.
 
 ## Testing
 
-- Unit: type sniffing, dedup, provider adapters against fixtures, injection
-  payload construction, encryption round-trip.
-- Integration: fake GHL webhook + mock providers + mock v3 API (MOCK mode like
-  attribution-bridge).
-- E2E: dev subaccount + real phone, per modality, including failure paths
-  (dead key, oversize file, unknown type) and the kill switch.
+- Unit: media signature detection, type sniffing, dedup/idempotency, provider
+  adapters against fixtures, injection payload, encryption round-trip.
+- Integration: MOCK mode — fake v3 API + fake GHL + fake providers (pattern
+  from attribution-bridge).
+- E2E: dev subaccount + real phone per modality, failure paths (dead key,
+  oversize, stale URL), kill switch, restart-idempotency.
 
 ## Risks & open questions
 
 | Risk | Status / mitigation |
 |---|---|
-| Attachment URL auth/expiry unknown | SPIKE-1 |
-| Ingest lag → conversation lookup race | Retry w/ backoff; measured in SPIKE-2 |
-| `additional_instructions` one-shot (no history persistence) | Accepted for MVP; SPIKE-3 explores `createMessage` |
-| GHL marketplace app review timeline | Unlisted app for pilot; review runs in parallel, never blocks |
-| Customer AI-key rate limits mid-conversation | Health surfacing + failure-fallback completion |
+| Ingest lag → detection delay for first-ever message from new contact | Measured in SPIKE-1a; retries built into watcher |
+| PIT message-fetch doesn't return usable attachment URLs | SPIKE-1b; fallback = marketplace app returns (rev 1 design) for the fetch role only |
+| v3 rate limits force slow polling at scale | SPIKE-2; adaptive polling; per-tenant keys shard the budget naturally |
+| `additional_instructions` one-shot (no history persistence) | Accepted for MVP; SPIKE-3 explores `/v3/messages` |
+| Customer AI-key rate limits / dead keys | Live validation at onboarding + health panel + failure-fallback completion |
 | Sensitive media (IDs, bank screenshots) | In-memory only, no persistence, no content logs; pilot consent language |
-| Native fix ships → double processing | Marker + kill switches; owner to obtain ETA |
+| Native fix ships → overlap | Marker + kill switches; MCP server graduates into native support; owner to obtain ETA |
