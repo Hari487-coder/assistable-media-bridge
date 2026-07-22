@@ -86,8 +86,10 @@ GHL fires InboundMessage webhook ──► Bridge service (marketplace app subsc
 
 ### Fallback (flagged, not default)
 
-GHL inbound-injection ("🎤 [Voice note]: …" posted as inbound message) stays
-implemented behind a config flag, ONLY activated if SPIKE-1 kills the v3 seam.
+GHL inbound-injection ("🎤 [Voice note]: …" posted as inbound message) is a
+designed-but-NOT-built fallback: the pipeline keeps an injection-strategy seam so
+it can be added behind a config flag, but it is only built if SPIKE-1 kills the
+v3 seam.
 If ever enabled it MUST ship with a caption-skip policy and explicit
 automation-hazard warnings at onboarding. It is also the seam a future
 non-Assistable-bot mode would use (explicit non-goal for now).
