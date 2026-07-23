@@ -8,6 +8,7 @@
   },
   "scripts": {
     "dev": "tsx src/index.ts",
+    "dev:mock": "cross-env MOCK_MODE=1 NODE_OPTIONS=--disable-warning=ExperimentalWarning tsx src/index.ts",
     "spike": "tsx src/spike.ts",
     "test": "cross-env NODE_OPTIONS=--disable-warning=ExperimentalWarning vitest run",
     "typecheck": "tsc --noEmit"
