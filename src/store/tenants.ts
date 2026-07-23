@@ -63,6 +63,10 @@ export function createTenantStore(db: Db, key: Buffer) {
     setWaker(id: string, on: boolean) {
       db.prepare("UPDATE tenants SET waker_enabled = ? WHERE id = ?").run(on ? 1 : 0, id);
     },
+    setModality(id: string, which: "audio" | "image", on: boolean) {
+      const col = which === "audio" ? "audio_on" : "image_on";
+      db.prepare(`UPDATE tenants SET ${col} = ? WHERE id = ?`).run(on ? 1 : 0, id);
+    },
   };
 }
 export type TenantStore = ReturnType<typeof createTenantStore>;
