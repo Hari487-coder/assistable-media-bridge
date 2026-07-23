@@ -25,10 +25,12 @@ export function createGhlClient(opts: GhlClientOptions) {
   return {
     async latestMediaMessages(q: { locationId: string; contactId: string; limit?: number }) {
       const search = await get(
-        `/conversations/search?locationId=${encodeURIComponent(q.locationId)}&contactId=${encodeURIComponent(q.contactId)}`
+        `/conversations/search?locationId=${encodeURIComponent(q.locationId)}&contactId=${encodeURIComponent(q.contactId)}&sortBy=last_message_date&sort=desc`
       );
       if (!search.ok) throw new Error(`ghl conversations/search ${search.status}`);
-      const convs = (search.json?.conversations ?? []) as Array<{ id: string }>;
+      // Explicit ordering — do not trust GHL's default sort; spike verifies param names against the live API.
+      const rawConvs = search.json?.conversations;
+      const convs = (Array.isArray(rawConvs) ? rawConvs : []) as Array<{ id: string }>;
       if (convs.length === 0) return [];
       const msgsRes = await get(`/conversations/${convs[0].id}/messages`);
       if (!msgsRes.ok) throw new Error(`ghl messages ${msgsRes.status}`);

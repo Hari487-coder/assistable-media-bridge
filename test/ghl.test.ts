@@ -12,26 +12,50 @@ function fakeFetch(routes: Record<string, unknown>) {
 }
 
 describe("ghl client", () => {
-  it("finds newest inbound media messages for a contact", async () => {
+  it("finds newest inbound media messages for a contact, ordered by date descending", async () => {
     const { impl, calls } = fakeFetch({
       "/conversations/search": { conversations: [{ id: "conv9" }] },
       "/conversations/conv9/messages": { messages: { messages: [
         { id: "g1", direction: "inbound", attachments: [], dateAdded: "2026-07-23T01:00:00Z" },
         { id: "g2", direction: "inbound", attachments: ["https://cdn/x.ogg"], dateAdded: "2026-07-23T02:00:00Z" },
+        { id: "g0", direction: "inbound", attachments: ["https://cdn/z.jpg"], dateAdded: "2026-07-23T01:30:00Z" },
         { id: "g3", direction: "outbound", attachments: ["https://cdn/y.png"], dateAdded: "2026-07-23T03:00:00Z" },
       ] } },
     });
     const ghl = createGhlClient({ baseUrl: "https://g", pit: "P", fetchImpl: impl });
-    const rows = await ghl.latestMediaMessages({ locationId: "L", contactId: "C" });
-    expect(rows).toHaveLength(1);
+    const rows = await ghl.latestMediaMessages({ locationId: "L", contactId: "C", limit: 2 });
+    expect(rows).toHaveLength(2);
     expect(rows[0].id).toBe("g2");
+    expect(rows[1].id).toBe("g0");
     const h = calls[0].init.headers as Record<string, string>;
     expect(h.Authorization).toBe("Bearer P");
     expect(h.Version).toBe("2021-04-15");
+    expect(calls[0].url).toContain("sortBy=last_message_date");
+    expect(calls[0].url).toContain("sort=desc");
   });
   it("returns [] when contact has no conversations", async () => {
     const { impl } = fakeFetch({ "/conversations/search": { conversations: [] } });
     const ghl = createGhlClient({ baseUrl: "https://g", pit: "P", fetchImpl: impl });
     expect(await ghl.latestMediaMessages({ locationId: "L", contactId: "C" })).toEqual([]);
+  });
+  it("handles non-array conversations shape without crashing", async () => {
+    const { impl } = fakeFetch({ "/conversations/search": { conversations: {} } });
+    const ghl = createGhlClient({ baseUrl: "https://g", pit: "P", fetchImpl: impl });
+    expect(await ghl.latestMediaMessages({ locationId: "L", contactId: "C" })).toEqual([]);
+  });
+  it("validatePit returns true when search route responds 200", async () => {
+    const { impl } = fakeFetch({ "/conversations/search": { conversations: [] } });
+    const ghl = createGhlClient({ baseUrl: "https://g", pit: "L", fetchImpl: impl });
+    expect(await ghl.validatePit("L")).toBe(true);
+  });
+  it("validatePit returns false when search route responds 401", async () => {
+    const impl = (async () => new Response("{}", { status: 401 })) as typeof fetch;
+    const ghl = createGhlClient({ baseUrl: "https://g", pit: "bad", fetchImpl: impl });
+    expect(await ghl.validatePit("L")).toBe(false);
+  });
+  it("validatePit returns false when fetchImpl throws", async () => {
+    const impl = (async () => { throw new Error("net"); }) as typeof fetch;
+    const ghl = createGhlClient({ baseUrl: "https://g", pit: "P", fetchImpl: impl });
+    expect(await ghl.validatePit("L")).toBe(false);
   });
 });
