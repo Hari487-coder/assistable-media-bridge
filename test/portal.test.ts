@@ -53,4 +53,15 @@ describe("portal", () => {
     expect(res.status).toBe(200);
     expect(res.text).toContain("wake");
   });
+  it("escapes a malicious tenant label in the dashboard title (no XSS)", async () => {
+    const { app, tenants } = makeApp();
+    const t = tenants.create({
+      label: "</title><script>alert(1)</script>", locationId: "L1", assistantId: "A1",
+      provider: "gemini", v3Key: "v", ghlPit: "p", aiKey: "k",
+    });
+    const res = await request(app).get(`/dashboard/${t.token}`);
+    expect(res.status).toBe(200);
+    expect(res.text).not.toContain("<script>alert(1)</script>");
+    expect(res.text).toContain("&lt;/title&gt;&lt;script&gt;alert(1)&lt;/script&gt;");
+  });
 });
