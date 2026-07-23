@@ -4,6 +4,25 @@ A Model Context Protocol service that connects Assistable v3 assistants to media
 
 When a contact sends a voice note, photo, or document via WhatsApp/SMS/email into GHL, the assistant can now read it—automatically waking and analyzing on detect, or on-demand through the tool.
 
+## Deploy your own (one click)
+
+[![Deploy to Render](https://render.com/images/deploy-to-render-button.svg)](https://render.com/deploy?repo=https://github.com/Hari487-coder/assistable-media-bridge)
+
+You run your own copy. Nothing is shared or hosted centrally. Click the button, connect your Render account, and Render reads `render.yaml` and provisions everything:
+
+- The encryption key is **auto-generated** — you never enter it.
+- The public URL is **auto-detected** (Render's `RENDER_EXTERNAL_URL`) — no configuration.
+- A 1 GB disk holds the local database. Free/Starter tier is fine for a pilot.
+
+When the build goes green, open your service URL and you land on the onboarding portal. There you paste **your own** keys (they stay encrypted on **your** instance):
+
+1. Your GHL **Location ID** and default **assistant ID**
+2. Your **Assistable v3 API key**
+3. Your **AI provider key** — Gemini (recommended, free tier covers audio + images + PDFs) or OpenAI
+4. A **read-only GHL Private Integration Token** (scopes: `conversations.readonly`, `conversations/message.readonly`)
+
+Each credential is validated live before anything is saved, the `analyze_attachment` tool is auto-created in your assistant, and you get a prompt snippet to paste plus a private dashboard link. Then send a voice note with no caption to your number and watch the assistant answer it.
+
 ## Three Doors
 
 1. **Portal** (`/`, `/setup`, `/dashboard/:token`) — Volunteers connect their GHL location to an Assistable v3 assistant. Credentials are validated live. Kill switches (enable/disable bridge, waker, modalities) live on the dashboard.

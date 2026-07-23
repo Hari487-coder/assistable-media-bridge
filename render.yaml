@@ -14,10 +14,13 @@ services:
         value: "0"
       - key: DB_PATH
         value: /data/media-mcp.sqlite
+      # Auto-generated on deploy — the operator never touches it. Encrypts
+      # each tenant's stored credentials at rest (unique per instance).
       - key: ENCRYPTION_KEY
-        sync: false
-      - key: PUBLIC_BASE_URL
-        sync: false
+        generateValue: true
+      # PUBLIC_BASE_URL is intentionally omitted: the app falls back to
+      # Render's auto-injected RENDER_EXTERNAL_URL, so one-click deploys need
+      # zero manual URL configuration.
       - key: WAKER_INTERVAL_MS
         value: "25000"
       - key: V3_BASE_URL
