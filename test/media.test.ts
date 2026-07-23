@@ -42,4 +42,26 @@ describe("downloadMedia", () => {
     });
     expect(big).toEqual({ error: "too_large" });
   });
+  it("does not follow redirects — 3xx from an allowed host fails closed", async () => {
+    let redirectMode: string | undefined;
+    const impl = (async (_url: unknown, init?: RequestInit) => {
+      redirectMode = init?.redirect;
+      return new Response(null, { status: 302, headers: { location: "https://evil.example.com/x" } });
+    }) as unknown as typeof fetch;
+    const r = await downloadMedia("https://storage.msgsndr.com/x.ogg", { fetchImpl: impl });
+    expect(r).toEqual({ error: "fetch_failed" });
+    expect(redirectMode).toBe("manual");
+  });
+  it("rejects oversize via content-length before reading the body", async () => {
+    let bodyRead = false;
+    const stream = new ReadableStream<Uint8Array>({
+      pull() { bodyRead = true; },
+    });
+    const impl = (async () =>
+      new Response(stream, { status: 200, headers: { "content-length": "999999999" } })
+    ) as unknown as typeof fetch;
+    const r = await downloadMedia("https://storage.msgsndr.com/x.ogg", { fetchImpl: impl, maxBytes: 100 });
+    expect(r).toEqual({ error: "too_large" });
+    expect(bodyRead).toBe(false);
+  });
 });
