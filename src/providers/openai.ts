@@ -1,6 +1,10 @@
 import { type MediaInput, type MediaProvider, PROMPTS, toBase64 } from "./types";
 
 const BASE = process.env.OPENAI_BASE_URL ?? "https://api.openai.com";
+const AUDIO_EXT: Record<string, string> = {
+  "audio/ogg": "ogg", "audio/mpeg": "mp3", "audio/mp4": "m4a",
+  "audio/wav": "wav", "audio/amr": "amr",
+};
 
 export function openaiProvider(apiKey: string, fetchImpl?: typeof fetch): MediaProvider {
   const f = fetchImpl ?? fetch;
@@ -10,13 +14,14 @@ export function openaiProvider(apiKey: string, fetchImpl?: typeof fetch): MediaP
       if (input.kind === "audio") {
         const form = new FormData();
         form.set("model", "whisper-1");
-        form.set("file", new Blob([Buffer.from(input.bytes)], { type: input.mime }), "audio.ogg");
+        const ext = AUDIO_EXT[input.mime] ?? "ogg";
+        form.set("file", new Blob([Buffer.from(input.bytes)], { type: input.mime }), `audio.${ext}`);
         const res = await f(`${BASE}/v1/audio/transcriptions`, {
           method: "POST", headers: { Authorization: `Bearer ${apiKey}` }, body: form,
         });
         if (!res.ok) throw new Error(`openai whisper ${res.status}`);
         const json = (await res.json()) as { text?: string };
-        if (!json.text) throw new Error("openai whisper returned no text");
+        if (!json.text?.trim()) throw new Error("openai whisper returned no text");
         return json.text;
       }
       const res = await f(`${BASE}/v1/chat/completions`, {

@@ -47,3 +47,51 @@ describe("openai adapter", () => {
     expect(out).toContain("not yet supported");
   });
 });
+
+describe("error handling", () => {
+  it("gemini throws on empty candidates", async () => {
+    const { impl } = capture({ candidates: [] });
+    const p = getProvider("gemini", "GK", impl);
+    await expect(p.describe({ kind: "image", mime: "image/png", bytes: new Uint8Array([1]) }))
+      .rejects.toThrow(/no text/);
+  });
+  it("gemini http error carries only the status, never the url/key", async () => {
+    const impl = (async () => new Response("{}", { status: 403 })) as unknown as typeof fetch;
+    const p = getProvider("gemini", "SECRETKEY", impl);
+    await expect(p.describe({ kind: "audio", mime: "audio/ogg", bytes: new Uint8Array([1]) }))
+      .rejects.toThrow(/^gemini 403$/);
+  });
+  it("gemini network error is redacted", async () => {
+    const impl = (async () => { throw new Error("connect fail https://g/?key=SECRETKEY"); }) as unknown as typeof fetch;
+    const p = getProvider("gemini", "SECRETKEY", impl);
+    await expect(p.describe({ kind: "audio", mime: "audio/ogg", bytes: new Uint8Array([1]) }))
+      .rejects.toThrow(/^gemini request failed \(network\)$/);
+  });
+  it("whisper whitespace-only transcript throws", async () => {
+    const { impl } = capture({ text: "   " });
+    const p = getProvider("openai", "OK", impl);
+    await expect(p.describe({ kind: "audio", mime: "audio/ogg", bytes: new Uint8Array([1]) }))
+      .rejects.toThrow(/no text/);
+  });
+  it("whisper filename extension follows the mime type", async () => {
+    const calls: Array<{ init: RequestInit }> = [];
+    const impl = (async (_u: unknown, init: RequestInit = {}) => {
+      calls.push({ init });
+      return new Response(JSON.stringify({ text: "t" }), { status: 200 });
+    }) as unknown as typeof fetch;
+    const p = getProvider("openai", "OK", impl);
+    await p.describe({ kind: "audio", mime: "audio/wav", bytes: new Uint8Array([1]) });
+    const form = calls[0].init.body as FormData;
+    expect((form.get("file") as File).name).toBe("audio.wav");
+  });
+  it("validateKey reflects provider reachability", async () => {
+    const gOk = getProvider("gemini", "GK", capture({ candidates: [{ content: { parts: [{ text: "ok" }] } }] }).impl);
+    expect(await gOk.validateKey()).toBe(true);
+    const gBad = getProvider("gemini", "GK", (async () => { throw new Error("x"); }) as unknown as typeof fetch);
+    expect(await gBad.validateKey()).toBe(false);
+    const oOk = getProvider("openai", "OK", (async () => new Response("{}", { status: 200 })) as unknown as typeof fetch);
+    expect(await oOk.validateKey()).toBe(true);
+    const oBad = getProvider("openai", "OK", (async () => new Response("{}", { status: 401 })) as unknown as typeof fetch);
+    expect(await oBad.validateKey()).toBe(false);
+  });
+});

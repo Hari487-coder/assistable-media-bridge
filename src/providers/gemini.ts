@@ -6,11 +6,17 @@ const MODEL = process.env.GEMINI_MODEL ?? "gemini-2.5-flash";
 export function geminiProvider(apiKey: string, fetchImpl?: typeof fetch): MediaProvider {
   const f = fetchImpl ?? fetch;
   const generate = async (parts: unknown[]) => {
-    const res = await f(`${BASE}/v1beta/models/${MODEL}:generateContent?key=${apiKey}`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ contents: [{ parts }] }),
-    });
+    let res: Response;
+    try {
+      res = await f(`${BASE}/v1beta/models/${MODEL}:generateContent?key=${apiKey}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ contents: [{ parts }] }),
+      });
+    } catch {
+      // Never propagate the raw error — the request URL embeds the API key.
+      throw new Error("gemini request failed (network)");
+    }
     if (!res.ok) throw new Error(`gemini ${res.status}`);
     const json = (await res.json()) as {
       candidates?: Array<{ content?: { parts?: Array<{ text?: string }> } }>;
