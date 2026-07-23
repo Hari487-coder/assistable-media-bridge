@@ -62,4 +62,32 @@ describe("analyzeForContact", () => {
     const r = await analyzeForContact(deps() as never, t2 as Tenant, "C1");
     expect(r.text).toContain("audio processing is disabled");
   });
+  it("caps at 3 attempts across messages with exactly one honest skip note", async () => {
+    const d = deps({ ghl: {
+      latestMediaMessages: async () => [
+        { id: "gA", attachments: ["https://storage.msgsndr.com/1.ogg", "https://storage.msgsndr.com/2.ogg", "https://storage.msgsndr.com/3.ogg", "https://storage.msgsndr.com/4.ogg"], direction: "inbound", dateAdded: "t2" },
+        { id: "gB", attachments: ["https://storage.msgsndr.com/5.ogg", "https://storage.msgsndr.com/6.ogg"], direction: "inbound", dateAdded: "t1" },
+      ],
+      validatePit: async () => true,
+    } });
+    const r = await analyzeForContact(d as never, tenant, "C1");
+    const noteMatches = r.text.match(/additional attachment\(s\) were not processed/g) ?? [];
+    expect(noteMatches).toHaveLength(1);
+    expect(r.text).toContain("[3 additional attachment(s) were not processed]");
+    expect((r.text.match(/Voice note transcript/g) ?? [])).toHaveLength(3);
+    expect(r.processedIds).toEqual(["gA", "gB"]);
+    expect(d.processed.has("t1", "gB")).toBe(true);
+  });
+  it("message with zero attachments yields no-new-attachments and marks nothing", async () => {
+    const d = deps({ ghl: {
+      latestMediaMessages: async () => [
+        { id: "gEmpty", attachments: [], direction: "inbound", dateAdded: "t1" },
+      ],
+      validatePit: async () => true,
+    } });
+    const r = await analyzeForContact(d as never, tenant, "C1");
+    expect(r.text).toContain("no new attachments");
+    expect(r.processedIds).toEqual([]);
+    expect(d.processed.has("t1", "gEmpty")).toBe(false);
+  });
 });

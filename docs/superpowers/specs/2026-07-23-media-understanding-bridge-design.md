@@ -143,7 +143,9 @@ Then the portal **auto-provisions** via their v3 key:
   platform-side; tool leg covers it automatically if/when uploads ship.
 - **Media targeting:** tool fetches the contact's latest inbound message(s) with
   attachments via GHL (conversation search by contactId), newest first, first 3
-  attachments, skipping anything already processed (dedupe by message id).
+  attachments attempted per call; excess is deliberately dropped with an honest
+  count note (never deferred — stale media retried later would confuse the
+  conversation); dedupe by message id.
 - **Latency:** captioned media ≈ instant (in-run tool call). Media-only ≈ poll
   interval + one extra model round-trip (< ~1 min; today's behavior is silence).
 - **Failure fallback (per-tenant toggle, default on):** unreadable media → tool
