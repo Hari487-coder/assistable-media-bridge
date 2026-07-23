@@ -1245,7 +1245,7 @@ export async function analyzeForContact(
 
 **Interfaces:**
 - Consumes: `TenantStore.getByToken`, `analyzeForContact`, `getProvider`, `createGhlClient`.
-- Produces: Express router factory `createToolRouter(ctx)` where `ctx = { tenants: TenantStore; processed: ProcessedStore; events: EventStore; config: AppConfig; ghlFactory(tenant): GhlClient; providerFactory(tenant): MediaProvider; mediaFetch?: typeof fetch }`. Route: `POST /tool/:token`.
+- Produces: Express router factory `createToolRouter(ctx)` where `ctx = { tenants: TenantStore; processed: ProcessedStore; events: EventStore; ghlFactory(tenant): GhlClient; providerFactory(tenant): MediaProvider; mediaFetch?: typeof fetch }`. Route: `POST /tool/:token`. (`config` was dropped from the ctx 2026-07-23 — dead field.)
 - Envelope handling (source-verified): body is `{ args, meta_data, metadata, call }`; contact/location read from `meta_data ?? metadata` keys `contact_id`/`contactId` + `location_id`/`locationId` (both casings tolerated — spike confirms the real one). Response is the raw JSON the LLM sees: `{ result: string }`. Errors NEVER 500 to the assistant: unknown token → 404 `{ result: "[media reader is not configured for this account]" }`; disabled tenant → 200 with `{ result: "[media reader is disabled]" }`; missing contact → 200 `{ result: "[no contact context supplied]" }`.
 
 - [ ] **Step 1: Write failing tests**
@@ -2178,7 +2178,7 @@ export function buildApp(config: AppConfig) {
   app.use(express.urlencoded({ extended: false }));
   app.get("/health", (_req, res) => { res.json({ ok: true, mock: config.mock }); });
   app.use(createToolRouter({
-    tenants, processed, events, config,
+    tenants, processed, events,
     ghlFactory: ghlFor, providerFactory: providerFor, mediaFetch,
   }));
   app.use(createMcpRouter({ tenants, providerFactory: providerFor, mediaFetch }));
