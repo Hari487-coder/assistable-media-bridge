@@ -50,4 +50,29 @@ describe("v3 client", () => {
     const v3 = createV3Client({ baseUrl: "https://x", apiKey: "bad", fetchImpl: impl });
     expect(await v3.validateKey()).toBe(false);
   });
+  it("lists assistants", async () => {
+    const { impl, calls } = fakeFetch({ "api/v3/assistants": { body: { ok: true, data: { assistants: [{ id: "a1", name: "Bot" }] } } } });
+    const v3 = createV3Client({ baseUrl: "https://x", apiKey: "K", fetchImpl: impl });
+    const rows = await v3.listAssistants();
+    expect(rows[0]).toEqual({ id: "a1", name: "Bot" });
+    expect(calls[0].url).toContain("api/v3/assistants?limit=100");
+  });
+  it("creates a tool and returns its id", async () => {
+    const { impl, calls } = fakeFetch({ "api/v3/tools": { body: { ok: true, data: { id: "tool_7" } } } });
+    const v3 = createV3Client({ baseUrl: "https://x", apiKey: "K", fetchImpl: impl });
+    const r = await v3.createTool({ name: "analyze_attachment", description: "d", url: "https://svc/tool/t", httpMethod: "POST" });
+    expect(r.id).toBe("tool_7");
+    const body = JSON.parse(String(calls[0].init.body));
+    expect(body.name).toBe("analyze_attachment");
+  });
+  it("chatCompletion returns ok:false when API responds HTTP 200 with ok:false", async () => {
+    const { impl } = fakeFetch({ "chat/completions": { body: { ok: false, error: "assistant not found" } } });
+    const v3 = createV3Client({ baseUrl: "https://x", apiKey: "K", fetchImpl: impl });
+    const res = await v3.chatCompletion({
+      assistantId: "a1", conversationId: "c1", additionalInstructions: "test",
+    });
+    expect(res.ok).toBe(false);
+    expect(res.error).toContain("200");
+    expect(res.error).toContain("assistant not found");
+  });
 });

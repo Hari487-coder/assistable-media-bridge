@@ -30,7 +30,8 @@ export function createV3Client(opts: V3ClientOptions) {
     });
     let json: unknown = null;
     try { json = await res.json(); } catch { /* non-JSON error body */ }
-    return { ok: res.ok, status: res.status, json };
+    const bodyOk = !(json && typeof json === "object" && (json as { ok?: unknown }).ok === false);
+    return { ok: res.ok && bodyOk, status: res.status, json };
   };
 
   return {
@@ -58,7 +59,7 @@ export function createV3Client(opts: V3ClientOptions) {
         conversation_id: a.conversationId,
         additional_instructions: a.additionalInstructions,
       });
-      return r.ok ? { ok: true as const } : { ok: false as const, error: `v3 chat ${r.status}` };
+      return r.ok ? { ok: true as const } : { ok: false as const, error: `v3 chat ${r.status}: ${JSON.stringify(r.json).slice(0, 200)}` };
     },
     async listAssistants() {
       const r = await call("GET", "api/v3/assistants?limit=100");
