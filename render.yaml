@@ -1,0 +1,20 @@
+services:
+  - type: web
+    name: media-mcp
+    runtime: node
+    plan: starter
+    buildCommand: npm ci && npx tsc
+    startCommand: node dist/src/index.js
+    disk:
+      name: media-mcp-data
+      mountPath: /data
+      sizeGB: 1
+    envVars:
+      - key: MOCK_MODE
+        value: "0"
+      - key: DB_PATH
+        value: /data/media-mcp.sqlite
+      - key: ENCRYPTION_KEY
+        sync: false
+      - key: PUBLIC_BASE_URL
+        sync: false
