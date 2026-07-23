@@ -6,7 +6,7 @@
 
 **Architecture:** Single Node/TypeScript service. A processing core (locate media via GHL → download+sniff → BYO-key provider → text) is exposed through: (1) an HTTP endpoint receiving Assistable CUSTOM-tool envelope calls, (2) a per-tenant polling waker that detects media-only messages via the v3 API and wakes the assistant with `additional_instructions` telling it to call the tool, (3) a Streamable-HTTP MCP server. Portal onboards tenants with 3 validated pastes and auto-creates the tool via the v3 API. Everything runs in MOCK mode without real credentials.
 
-**Tech Stack:** Node 22, TypeScript (strict), Express 4, better-sqlite3, zod, @modelcontextprotocol/sdk, vitest + supertest. Native `fetch` everywhere; every client takes an injectable `fetchImpl` for tests.
+**Tech Stack:** Node 25 (installed: 25.6.1), TypeScript (strict), Express 4, `node:sqlite` (built-in — better-sqlite3 was dropped 2026-07-23: no prebuilt binary for Node 25 + no VS build tools on this machine), zod, @modelcontextprotocol/sdk, vitest + supertest. Native `fetch` everywhere; every client takes an injectable `fetchImpl` for tests.
 
 ## Global Constraints
 
@@ -37,8 +37,8 @@
 ```bash
 cd "C:\Users\Hari Prathap\Downloads\Case Study\assistable-media-bridge"
 npm init -y
-npm i express better-sqlite3 zod @modelcontextprotocol/sdk
-npm i -D typescript tsx vitest supertest @types/express @types/better-sqlite3 @types/node @types/supertest
+npm i express zod @modelcontextprotocol/sdk
+npm i -D typescript tsx vitest supertest @types/express @types/node @types/supertest
 ```
 
 `package.json` scripts:
@@ -297,16 +297,16 @@ describe("event store", () => {
 
 - [ ] **Step 3: Implement**
 
-`src/db.ts`:
+`src/db.ts` (uses Node's built-in `node:sqlite` — same `.prepare().get/.all/.run` call shapes as better-sqlite3):
 
 ```ts
-import Database from "better-sqlite3";
+import { DatabaseSync } from "node:sqlite";
 
-export type Db = Database.Database;
+export type Db = DatabaseSync;
 
 export function openDb(path: string): Db {
-  const db = new Database(path);
-  db.pragma("journal_mode = WAL");
+  const db = new DatabaseSync(path);
+  db.exec("PRAGMA journal_mode = WAL;");
   db.exec(`
     CREATE TABLE IF NOT EXISTS tenants (
       id TEXT PRIMARY KEY, token TEXT UNIQUE NOT NULL, label TEXT NOT NULL,
