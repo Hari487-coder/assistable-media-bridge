@@ -90,6 +90,20 @@ describe("mcp endpoint", () => {
       .send(rpc("tools/list", {}));
     expect(res.status).toBe(401);
   });
+  it("honors the audio modality kill switch on the MCP door", async () => {
+    // Same disabled-modality gate the tool/waker path enforces — a disabled
+    // modality must not process on any door. oggBytes sniffs as audio.
+    const { app, token, tenants } = makeApp();
+    const t = tenants.getByToken(token)!;
+    tenants.setModality(t.id, "audio", false);
+    const res = await request(app)
+      .post(`/mcp/${token}`)
+      .set("Accept", "application/json, text/event-stream")
+      .send(rpc("tools/call", { name: "transcribe_audio", arguments: { url: "https://storage.msgsndr.com/a.ogg" } }));
+    expect(res.status).toBe(200);
+    expect(res.body.result.isError).toBe(true);
+    expect(res.body.result.content[0].text).toMatch(/audio processing is disabled/i);
+  });
   it("status tool returns the account config", async () => {
     const { app, token } = makeApp();
     const res = await request(app)
