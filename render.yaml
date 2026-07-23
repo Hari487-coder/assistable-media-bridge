@@ -18,3 +18,9 @@ services:
         sync: false
       - key: PUBLIC_BASE_URL
         sync: false
+      - key: WAKER_INTERVAL_MS
+        value: "25000"
+      - key: V3_BASE_URL
+        value: https://app.assistable.ai
+      - key: GHL_BASE_URL
+        value: https://services.leadconnectorhq.com

@@ -27,7 +27,7 @@ This runs the service on `:3900` in mock mode:
 npm test
 ```
 
-Runs 73 tests covering stores, crypto, clients, media sniff/download, provision, waker, portal, MCP server, tool endpoint, and MOCK E2E.
+Runs the full test suite covering stores, crypto, clients, media sniff/download, provision, waker, portal, MCP server, tool endpoint, and MOCK E2E.
 
 ```bash
 npm run typecheck
@@ -137,8 +137,8 @@ If modalities cannot be read from GHL (e.g., PIT lacks permissions), the dashboa
 
 - **Stores:** Tenants (in-memory + SQLite), Events (SQLite), Processed (in-memory, auto-pruned every hour)
 - **Waker:** Runs every 25s (configurable via `WAKER_INTERVAL_MS`). Cursor is in-memory; restart causes one prime cycle (no storm due to dedup).
-- **Providers:** Gemini (via `@google/generative-ai`) and OpenAI (via `openai` SDK). Each implements `describe(kind, mime, bytes)` → text.
-- **Crypto:** AES-256-GCM for credential encryption; crypto key is per-message (random IV every write).
+- **Providers:** Gemini (raw REST call to `generativelanguage.googleapis.com`, handles audio/image/PDF) and OpenAI (Whisper for audio, `gpt-4o-mini` vision for images; PDF unsupported). No provider SDK dependency — plain `fetch`. Each implements `describe({ kind, mime, bytes })` → text on the customer's BYO key.
+- **Crypto:** AES-256-GCM for credential encryption at rest; one fixed master key (`ENCRYPTION_KEY`), a fresh random IV on every write.
 
 ## Deployment
 
@@ -169,6 +169,6 @@ services:
 Build emits to `dist/src/` (TypeScript preserves directory structure). Start command is `node dist/src/index.js`.
 
 Before going live, verify:
-1. `npm test` is green (73 tests)
+1. `npm test` is green (full suite)
 2. `npm run spike -- detect`, `fetch`, `wake`, `tool-listen` work with real credentials
 3. Dashboard health panel shows recent activity after an attachment is sent
