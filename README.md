@@ -4,24 +4,35 @@ A Model Context Protocol service that connects Assistable v3 assistants to media
 
 When a contact sends a voice note, photo, or document via WhatsApp/SMS/email into GHL, the assistant can now read it—automatically waking and analyzing on detect, or on-demand through the tool.
 
-## Deploy your own (one click)
+## Deploy your own in 3 steps
+
+You run your own copy. Nothing is shared or hosted centrally, and no one else can see your data.
+
+### Step 1 — Deploy
 
 [![Deploy to Render](https://render.com/images/deploy-to-render-button.svg)](https://render.com/deploy?repo=https://github.com/Hari487-coder/assistable-media-bridge)
 
-You run your own copy. Nothing is shared or hosted centrally. Click the button, connect your Render account, and Render reads `render.yaml` and provisions everything:
+Click the button, connect your Render account, hit **Apply**. Render reads `render.yaml` and provisions everything with **zero configuration** from you:
 
-- The encryption key is **auto-generated** — you never enter it.
-- The public URL is **auto-detected** (Render's `RENDER_EXTERNAL_URL`) — no configuration.
-- A 1 GB disk holds the local database. Free/Starter tier is fine for a pilot.
+- Encryption key: **auto-generated** (unique to your instance).
+- Public URL: **auto-detected**. A 1 GB disk holds your database. Starter tier is fine.
 
-When the build goes green, open your service URL and you land on the onboarding portal. There you paste **your own** keys (they stay encrypted on **your** instance):
+Wait for the build to go green, then open your new `https://<your-name>.onrender.com`.
 
-1. Your GHL **Location ID** and default **assistant ID**
-2. Your **Assistable v3 API key**
-3. Your **AI provider key** — Gemini (recommended, free tier covers audio + images + PDFs) or OpenAI
-4. A **read-only GHL Private Integration Token** (scopes: `conversations.readonly`, `conversations/message.readonly`)
+### Step 2 — Connect
 
-Each credential is validated live before anything is saved, the `analyze_attachment` tool is auto-created in your assistant, and you get a prompt snippet to paste plus a private dashboard link. Then send a voice note with no caption to your number and watch the assistant answer it.
+You land on the onboarding portal. Paste **your own** keys (they are validated live and stored encrypted on **your** instance only):
+
+- GHL **Location ID** + default **assistant ID**
+- **Assistable v3 API key**
+- **AI provider key** — Gemini (recommended, free tier covers audio + images + PDFs) or OpenAI
+- A **read-only GHL Private Integration Token** (scopes: `conversations.readonly`, `conversations/message.readonly`)
+
+On success the `analyze_attachment` tool is auto-created in your assistant, and you get a prompt snippet to paste plus your private dashboard link.
+
+### Step 3 — Test
+
+Send a **voice note with no caption** to your number. The assistant reads it and replies. Watch the poll → detect → wake → tool events stream live on your dashboard.
 
 ## Three Doors
 

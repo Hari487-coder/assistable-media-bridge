@@ -46,6 +46,26 @@ const STYLE = `
     font-size: 26px; font-weight: 650; letter-spacing: -0.01em; margin: 0 0 6px;
   }
   .lede { color: var(--ink-dim); margin: 0 0 32px; max-width: 52ch; }
+  .journey {
+    display: flex; gap: 8px; flex-wrap: wrap; margin: 0 0 28px;
+    font-family: var(--mono); font-size: 11px; letter-spacing: 0.05em;
+  }
+  .journey .s {
+    display: inline-flex; align-items: center; gap: 8px;
+    padding: 7px 13px 7px 8px; border: 1px solid var(--line);
+    border-radius: 999px; color: var(--ink-faint); background: var(--panel-2);
+  }
+  .journey .s b { font-weight: 600; }
+  .journey .s.now { color: var(--ink); border-color: var(--accent-dim); }
+  .journey .s.done { color: var(--accent); border-color: var(--accent-dim); }
+  .journey .s .n {
+    width: 17px; height: 17px; border-radius: 50%; display: grid;
+    place-items: center; font-size: 10px; background: var(--panel);
+    border: 1px solid var(--line); color: inherit;
+  }
+  .journey .s.done .n {
+    background: var(--accent-dim); border-color: var(--accent-dim); color: var(--accent);
+  }
   .trace {
     display: flex; align-items: center; gap: 0; margin: 0 0 32px;
     font-family: var(--mono); font-size: 12px; color: var(--ink-faint);
@@ -184,6 +204,11 @@ export function createPortalRouter(ctx: PortalCtx): Router {
 
   router.get("/", (_req, res) => {
     res.send(shell("Media MCP — Connect", `
+      <div class="journey" aria-label="Setup progress">
+        <span class="s done"><span class="n">✓</span> <b>Deployed</b> · your instance</span>
+        <span class="s now"><span class="n">2</span> <b>Connect</b> your account</span>
+        <span class="s"><span class="n">3</span> <b>Test</b> a voice note</span>
+      </div>
       <h1>Connect a subaccount</h1>
       <p class="lede">Wire a GHL location to an Assistable v3 assistant so it can read voice notes,
         photos, and documents contacts send in. Every credential below is checked live before
