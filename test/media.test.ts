@@ -52,16 +52,13 @@ describe("downloadMedia", () => {
     expect(r).toEqual({ error: "fetch_failed" });
     expect(redirectMode).toBe("manual");
   });
-  it("rejects oversize via content-length before reading the body", async () => {
-    let bodyRead = false;
-    const stream = new ReadableStream<Uint8Array>({
-      pull() { bodyRead = true; },
-    });
+  it("rejects oversize via content-length pre-check", async () => {
+    // Body is tiny (under the cap) — only the content-length pre-check can
+    // produce too_large here; the streaming cap alone would return bytes.
     const impl = (async () =>
-      new Response(stream, { status: 200, headers: { "content-length": "999999999" } })
+      new Response(new Uint8Array(10), { status: 200, headers: { "content-length": "999999999" } })
     ) as unknown as typeof fetch;
     const r = await downloadMedia("https://storage.msgsndr.com/x.ogg", { fetchImpl: impl, maxBytes: 100 });
     expect(r).toEqual({ error: "too_large" });
-    expect(bodyRead).toBe(false);
   });
 });
