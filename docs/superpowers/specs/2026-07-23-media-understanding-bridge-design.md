@@ -1,8 +1,8 @@
 # Media MCP — Media Understanding for Assistable (Design Spec)
 
-**Date:** 2026-07-23 (rev 2 — MCP-first architecture, replaces the GHL-marketplace-app hybrid)
-**Status:** Approved pending spike gate (SPIKE-1)
-**Owner:** Hari
+**Date:** 2026-07-23 (rev 3 — adds the Custom Tool leg; one processing core, three doors)
+**Status:** Approved (owner: "let's build it"); live-integration items verified by spike harness during build
+**Owner:** Hari · **Pilot:** volunteer design partner connects their own subaccount + keys
 **Project dir:** `Case Study/assistable-media-bridge`
 
 ## Problem
@@ -10,190 +10,202 @@
 Assistable assistants cannot understand non-text messages. Verified in platform source:
 
 - Media-only inbound messages (image/PDF/voice note, no caption) are silently dropped
-  before the AI runs — `enrich.worker.ts:479` (`empty_inbound_body` filter) and
+  before the AI runs — `enrich.worker.ts:479` (`empty_inbound_body`) and
   `agent-run.ts:468` (null-content filter). The assistant is never invoked.
-- The drop happens BEFORE the `message.received` outbound webhook emission
-  (`enrich.worker.ts:1222`), so platform webhooks never fire for media-only
-  messages either — and their payload carries no attachments regardless.
-- Attachment URLs ARE persisted on the Message row (`ingest.worker.ts`
-  `normalizeAttachments`) but no consumer reads them; no v3 read route exposes
-  them (`MESSAGE_SELECT` omits `attachments`).
-- GHL attachment URLs go stale (documented in `call-events.ts:2487` — 403/dead
-  links); any design must fetch a fresh URL at processing time.
+- The drop happens BEFORE the `message.received` webhook emission
+  (`enrich.worker.ts:1222`) — platform webhooks never fire for media-only messages,
+  and their payload has no attachments anyway.
+- Attachment URLs are persisted on the Message row but nothing consumes them; no v3
+  read route exposes them (`MESSAGE_SELECT` omits `attachments`).
+- GHL attachment URLs go stale (`call-events.ts:2487` — 403/dead links): always
+  fetch a fresh URL at processing time.
+- Captioned media DOES wake the AI (body non-empty) but the AI cannot see the
+  attachment. The chat widget has NO attachment upload support at all
+  (`chat-stream.ts` — nothing to analyze there until the platform adds uploads;
+  the tool leg covers it automatically when that happens).
 
-The native fix is "in development" with no public ETA.
+Native fix "in development", no ETA.
 
 ## Constraints (hard, from owner)
 
-1. Fully self-serve portal pattern (like the live-KB portal); nothing operated
-   per-customer.
-2. **Strict BYO AI key** (decided 2026-07-22). Guided key-creation flow in the
-   portal is the mitigation for key-minting friction.
-3. Setup = a few clicks / pastes; more reliable than manual workflow configuration.
-4. All media types: images (OCR/understanding), PDFs, voice notes/audio.
+1. Fully self-serve portal (live-KB pattern); nothing operated per-customer.
+2. **Strict BYO AI key** (Gemini default; guided key-creation flow).
+3. Setup = a few clicks/pastes, validated live.
+4. All media types (image, PDF, voice/audio) across all channels where media can
+   arrive (SMS/MMS, WhatsApp, FB, IG — all flow through the same GHL
+   `Message.attachments` path, so ONE mechanism covers all of them).
 5. No Assistable platform changes required.
-6. Media-only messages (no caption) MUST work.
-7. **MCP is the product's interface** (owner directive 2026-07-23): the service IS
-   an MCP server; it must plug directly into Assistable's announced native MCP
-   support the day that ships.
+6. Media-only messages MUST work.
+7. **MCP is the product's interface**; must plug into Assistable's announced
+   native MCP support the day it ships.
 
-## The physics (why a watcher exists)
-
-MCP is a pull protocol: servers are called, they do not observe. Nothing in MCP
-can detect an inbound WhatsApp message — and the natural caller (the assistant)
-is exactly what never wakes on media-only messages. Therefore the product is an
-MCP server (permanent interface) plus a **detection watcher** (temporary shim
-that MCP-the-protocol cannot provide). When native assistant↔MCP support ships,
-the watcher retires per tenant; the MCP server graduates into the native feature.
-
-## Architecture
+## Architecture: one processing core, three doors
 
 ```
-Contact sends voice note/image/PDF (WhatsApp/SMS/FB/IG)
-        │
-        ▼
-GHL webhook → Assistable ingest persists Message row
-  (content=null, attachments[], conversation row created)   [unchanged platform]
-  enrich drops it (empty_inbound_body) — assistant never wakes [the bug]
-        │
-        ▼
-┌─ Media MCP service (one hosted app, Render) ─────────────────────────────┐
-│                                                                          │
-│  WATCHER (per tenant, ~20–30s cycle, tenant's v3 API key):               │
-│    poll GET /v3/conversations?sort=newest → changed conversations        │
-│    → list messages (v3) → inbound USER + empty content = media signature │
-│    → fetch message via GHL API (tenant PIT) for FRESH attachment URL     │
-│    → download (allowlisted domains, size caps, magic-byte sniff)         │
-│    → route on tenant's BYO key:                                          │
-│        audio → transcribe · image → vision/OCR · PDF → extract           │
-│    → POST /v3/chat/completions { assistant_id, conversation_id,          │
-│        additional_instructions: "<marker> transcript…" }                 │
-│      → executeAgentRun (chat.ts:72): FULL normal pipeline — reply        │
-│        channel, human-takeover + sleep-window checks, billing, tracing — │
-│        sends the reply to the contact                                    │
-│    → optional (SPIKE-3): POST /v3/messages (source API) to persist the   │
-│      transcript into history for follow-up turns                         │
-│                                                                          │
-│  MCP SERVER (Streamable HTTP, same service):                             │
-│    tools: transcribe_audio · analyze_image · read_document ·             │
-│           analyze_attachment · connect_location · status                 │
-│    callable TODAY from: Assistable workflow-builder MCP node (native     │
-│    MCP client, verified in v2 source), Claude, Cursor, any MCP client    │
-│    callable TOMORROW from: assistants natively, when the platform's      │
-│    announced MCP feature ships → watcher retires per tenant              │
-└──────────────────────────────────────────────────────────────────────────┘
+                 ┌────────────────────── Media MCP service ──────────────────────┐
+                 │                                                               │
+ DOOR 1          │   PROCESSING CORE                                             │
+ Custom Tool ───►│   resolve tenant → locate media (GHL fetch, fresh URL,        │
+ (assistant      │   via PIT; contactId+locationId from tool meta_data)          │
+ calls it        │   → download (allowlist, caps, magic-byte sniff)              │
+ mid-run, any    │   → route on tenant BYO key:                                  │
+ channel,        │       audio→transcribe · image→vision/OCR · PDF→extract       │
+ captioned or    │   → return extracted text                                     │
+ woken)          │                                                               │
+                 │                                                               │
+ DOOR 2          │   WAKER (per tenant, ~20–30s poll, tenant v3 key)             │
+ media-only ────►│   poll /api/v3/conversations?sort=newest → changed convos     │
+ messages        │   → GET /api/v3/conversations/:id/messages                    │
+ (the drop bug)  │   → source=USER + ai=false + empty content = media signature  │
+                 │   → dedupe → POST /api/v3/chat/completions                    │
+                 │     { assistant_id, conversation_id, additional_instructions: │
+                 │       "<marker> contact sent an attachment — call the         │
+                 │        analyze_attachment tool, then respond" }               │
+                 │   → executeAgentRun (chat.ts:72): FULL pipeline (takeover,    │
+                 │     sleep windows, billing, tracing, GHL send)                │
+                 │   → assistant calls the tool (Door 1) → replies               │
+                 │                                                               │
+ DOOR 3          │   MCP SERVER (Streamable HTTP)                                │
+ MCP clients ───►│   tools: analyze_attachment · transcribe_audio ·              │
+ (workflow       │          analyze_image · read_document · status               │
+ builder MCP     │   Callable today: v2 workflow-builder MCP node, Claude,       │
+ node today;     │   Cursor. Tomorrow: assistants natively (announced feature)   │
+ assistants      │   → waker retires per tenant = graduation, not decommission   │
+ when native     │                                                               │
+ MCP ships)      │   PORTAL (live-KB pattern) + tenant store (encrypted)         │
+                 └───────────────────────────────────────────────────────────────┘
 ```
 
-### What was rejected and why (decision log)
+### Why the tool leg works with API-created tools (source-verified)
 
-- **GHL Marketplace app (rev 1)** — cut: marketplace review friction, OAuth infra,
-  and the unvalidated inbound-injection question, all replaced by v3 polling
-  detection. No GHL app, no GHL workflows, no webhooks.
-- **GHL inbound-message injection** — cut (council, 2026-07-22): fabricated
-  contact-attributed messages fire phantom "Customer Replied" automations,
-  double-reply on captioned media, pollute CRM history, and carry marketplace
-  policy risk. The v3 `additional_instructions` seam has none of these.
-- **Assistable outbound webhook → workflow trigger** — dead: `message.received`
-  is emitted after the empty-body drop; media-only messages never fire it.
-- **Assistable Custom Tool** — dead: media-only messages never wake the AI;
-  Direct-Request execution needs a platform DB flip.
-- **Workflow-builder-only solution** — dead as primary: workflow triggers are
-  WEBHOOK/MANUAL/SCHEDULE only (no message trigger). The workflow MCP node
-  remains a supported *consumer* of our MCP server for custom automations.
+`executionType` ("Direct") only controls the upstream **body shape** — raw args vs
+the `{args, meta_data, metadata, call}` envelope (`tool-proxy.service.ts:25-36,95-106`).
+**Every** tool's upstream HTTP response is returned verbatim into the run
+(chat executes in-process via `executeProxiedTool`). So a CUSTOM tool created via
+`POST /api/v3/tools` (no `executionType` field exposed — fine) is synchronous out
+of the box; our endpoint simply accepts the envelope format: `body.args` +
+`body.meta_data` (carries `locationId`, `contactId` — built in `agent-run.ts:915-924`).
+The old "Direct Request is DB-only" concern applied to raw-body mode only — not
+to result return. Risk dissolved.
 
-## Onboarding (portal, live-KB pattern)
+### Tool-leg context bonus
 
-Three pastes, each validated with a live call before accept:
+The extracted text returns as a tool result inside the run and persists in
+conversation history (tool trace) — follow-up turns see it. This addresses what
+SPIKE-3 was for; `/v3/messages` (source API) persistence remains an optional
+enhancement, not a dependency.
 
-1. **Assistable v3 API key** (watcher + injection)
-2. **AI provider key** — Gemini default (one key: audio+vision+PDF, free tier),
-   OpenAI supported (vision + Whisper), Anthropic image/PDF-only (portal marks
-   audio unsupported). Guided key-creation walkthrough per provider.
-3. **GHL Private Integration Token** — read-only conversation scopes, exact
-   checkbox checklist shown; used ONLY to fetch fresh media URLs/bytes.
-   No workflow creation. (Drops to two pastes if the platform ever adds
-   `attachments` to the v3 message serializer — a one-line `MESSAGE_SELECT`
-   change worth requesting; see Platform asks.)
+### Decision log (dead routes, source-verified)
 
-Per-location controls: modality toggles, enable/disable (kill switch), health
-panel (last poll, last detection, last injection, last error, key status).
+- **GHL inbound-message injection** — fabricated contact-attributed messages fire
+  phantom "Customer Replied" automations, double-reply on captioned media,
+  pollute CRM history (council 2026-07-22).
+- **GHL Marketplace app for detection (rev 1)** — replaced by v3 polling; cut
+  marketplace review, OAuth infra, webhook infra.
+- **Platform `message.received` webhook trigger** — emitted after the empty-body
+  drop; never fires for media-only.
+- **Workflow triggers as detector** — WEBHOOK/MANUAL/SCHEDULE only; no message
+  trigger. (Workflow MCP node remains a Door-3 consumer.)
+- **Watcher processes media itself (rev 2)** — superseded: waker now only wakes;
+  all processing consolidated behind Door 1 (single code path, tool-trace
+  context persistence for free).
+
+## Onboarding (portal, live-KB pattern — volunteer pilot flow)
+
+Three validated pastes, then automatic provisioning:
+
+1. **Assistable v3 API key** — validated live; used by waker + injection +
+   tool auto-creation. Auth: `Authorization: Bearer <key>` against
+   `https://app.assistable.ai/api/v3/...` (base URL from the platform's own
+   MCP config, `apps/mcp-server/src/config.ts`).
+2. **AI provider key** — Gemini (default; audio+vision+PDF, free tier) or
+   OpenAI (Whisper + vision); Anthropic image/PDF-only (audio marked
+   unsupported). Guided key-creation walkthrough. Validated with a live call.
+3. **GHL Private Integration Token** — read-only conversation scopes (exact
+   checklist shown); used only to fetch fresh media URLs/bytes.
+
+Then the portal **auto-provisions** via their v3 key:
+- Creates the `analyze_attachment` CUSTOM tool in their subaccount
+  (`POST /api/v3/tools`: url → our endpoint with per-tenant token, parameters:
+  none required — meta_data carries context; description tells the LLM when to
+  call it).
+- Shows a copy-paste **prompt snippet** for their assistant ("If the contact
+  sends or mentions an attachment/photo/voice note, call analyze_attachment...").
+- User picks the default assistant (fetched via `GET /api/v3/assistants`) for
+  waker injections.
+- Per-location controls: modality toggles, waker on/off, tool on/off (kill
+  switches), health panel (last poll/detection/wake/tool call/error, key status).
 
 ## Key behaviors & policies
 
-- **Scope (MVP):** media-only messages (empty content + attachments). Captioned
-  media stays OUT (Assistable already answers the caption; enrichment for
-  captioned media is a follow-up gated on SPIKE-3 history persistence).
-- **Latency budget:** poll interval + processing ≈ reply in under ~1 minute.
-  Acceptable for async messaging (today's behavior is no reply, ever).
-  Tighten later via adaptive polling (hot conversations polled faster).
-- **Failure fallback (per-tenant toggle, default on):** provider error /
-  unsupported type / oversize / stale URL → inject a completion instructing the
-  assistant to acknowledge an unreadable attachment. Never silently reproduce
-  the original drop bug.
-- **Idempotency:** processed-message ID set (TTL) so restarts/re-polls never
-  double-inject; the `additional_instructions` marker doubles as the audit tag.
-- **Privacy:** attachments processed in memory only; no bytes or transcripts
-  persisted by the service; no media content in logs; keys/PITs AES-256-GCM
-  encrypted at rest (master key in env).
-- **Billing note (documented):** media replies draw the customer's Assistable
-  wallet like any AI reply + their own provider costs.
-- **Rate-limit citizenship:** poll cadence tuned to v3RateLimit budget
-  (measured in SPIKE-2); conversation-list poll is 1 req/cycle, message fetches
-  only for changed conversations.
+- **Coverage matrix (MVP):** media-only messages (waker→tool) + captioned media
+  (prompt-driven tool call) on all GHL channels. Chat widget: no uploads exist
+  platform-side; tool leg covers it automatically if/when uploads ship.
+- **Media targeting:** tool fetches the contact's latest inbound message(s) with
+  attachments via GHL (conversation search by contactId), newest first, first 3
+  attachments, skipping anything already processed (dedupe by message id).
+- **Latency:** captioned media ≈ instant (in-run tool call). Media-only ≈ poll
+  interval + one extra model round-trip (< ~1 min; today's behavior is silence).
+- **Failure fallback (per-tenant toggle, default on):** unreadable media → tool
+  returns a graceful "attachment couldn't be read" result so the assistant still
+  responds; waker never re-fires for the same message (dedupe persists across
+  restarts).
+- **Idempotency & loop safety:** processed-message set (SQLite, TTL); waker
+  matches only inbound USER + empty-content rows — its own injections and
+  assistant replies never match the signature.
+- **Privacy:** media processed in memory only; no bytes/transcripts persisted;
+  no media content in logs; keys/PITs AES-256-GCM at rest.
+- **Billing (documented):** media replies draw the customer's Assistable wallet
+  + their provider costs. Waker adds one completion per media-only message.
+- **Rate-limit citizenship:** poll cadence tuned to `v3RateLimit` budget
+  (measured during spike); message fetches only for changed conversations.
 
-## Spike gate (build nothing else first)
+## Spike harness (built first, run when volunteer creds arrive)
 
-- **SPIKE-1 (go/no-go, ~half day, all Assistable-side):** dev subaccount, real
-  WhatsApp voice note →
-  (a) v3 poll shows the conversation bump + empty-content inbound row (measure
-  ingest lag); (b) GHL message fetch via PIT returns a downloadable attachment
-  URL; (c) `POST /v3/chat/completions` with a fake transcript in
-  `additional_instructions` → **assistant's reply arrives on the phone.**
-  Success criterion = the reply, not a 200.
-- **SPIKE-2:** polling cadence vs v3 rate limits; detection latency distribution.
-- **SPIKE-3 (not MVP-blocking):** do `POST /v3/messages` (source API) rows enter
-  the agent's LLM context on later runs? Unlocks follow-up-turn context and
-  captioned-media enrichment.
+CLI (`spike detect` / `spike fetch` / `spike wake` / `spike tool`) verifying with
+real credentials: (a) media signature visible via v3 + ingest lag; (b) PIT fetch
+returns downloadable fresh attachment URLs; (c) chat/completions wake → assistant
+calls the tool → reply reaches the phone; (d) tool envelope shape + meta_data
+fields as expected. These are verification items, not design gates — the
+architecture builds in MOCK mode in parallel; live wiring flips on after the
+spike passes against the volunteer subaccount.
 
 ## MVP cut
 
-WhatsApp voice notes + images, media-only case, Gemini + OpenAI adapters,
-portal with guided key flows + health panel, MCP server surface (media tools),
-Render deploy. Fast follows: PDFs, Anthropic adapter, SMS/FB/IG verification,
-SPIKE-3-gated history persistence, adaptive polling.
+Voice notes + images (PDF fast-follow), media-only + captioned coverage,
+Gemini + OpenAI adapters, tool auto-provisioning, waker, MCP server surface,
+portal (3-paste onboarding + health panel + prompt snippet), MOCK mode,
+Render deploy. Fast follows: PDFs, Anthropic adapter, `/v3/messages` transcript
+persistence, adaptive polling, structured extraction (config-flip design only).
 
 ## Platform asks (nice-to-have, never dependencies)
 
 1. `attachments` in the v3 message serializer (one line) → kills the PIT paste.
-2. Native media feature ETA (sizes this product's lifespan).
-3. When native assistant↔MCP ships: connect our server as a first-class media
-   toolset (the graduation path).
+2. Native media feature ETA.
+3. Native assistant↔MCP: connect our server as a first-class media toolset.
 
 ## Non-goals
 
-- Structured extraction to CRM fields (payload designed so it's a config flip
-  later; not built).
-- Serving non-Assistable bots; public ecosystem listing.
-- Credit pool / managed keys (strict BYO stands).
-- Any Assistable platform-repo changes.
+Serving non-Assistable bots; public listing; credit pool/managed keys;
+platform-repo changes; widget file-upload UI (platform's job).
 
 ## Testing
 
-- Unit: media signature detection, type sniffing, dedup/idempotency, provider
-  adapters against fixtures, injection payload, encryption round-trip.
-- Integration: MOCK mode — fake v3 API + fake GHL + fake providers (pattern
-  from attribution-bridge).
-- E2E: dev subaccount + real phone per modality, failure paths (dead key,
-  oversize, stale URL), kill switch, restart-idempotency.
+- Unit: media signature, envelope parsing, sniffing, dedupe, adapters (fixtures),
+  injection payloads, crypto round-trip.
+- Integration: MOCK mode — fake v3 + fake GHL + fake providers.
+- E2E: volunteer subaccount + real phone per modality, failure paths (dead key,
+  oversize, stale URL), kill switches, restart idempotency.
 
 ## Risks & open questions
 
 | Risk | Status / mitigation |
 |---|---|
-| Ingest lag → detection delay for first-ever message from new contact | Measured in SPIKE-1a; retries built into watcher |
-| PIT message-fetch doesn't return usable attachment URLs | SPIKE-1b; fallback = marketplace app returns (rev 1 design) for the fetch role only |
-| v3 rate limits force slow polling at scale | SPIKE-2; adaptive polling; per-tenant keys shard the budget naturally |
-| `additional_instructions` one-shot (no history persistence) | Accepted for MVP; SPIKE-3 explores `/v3/messages` |
-| Customer AI-key rate limits / dead keys | Live validation at onboarding + health panel + failure-fallback completion |
-| Sensitive media (IDs, bank screenshots) | In-memory only, no persistence, no content logs; pilot consent language |
-| Native fix ships → overlap | Marker + kill switches; MCP server graduates into native support; owner to obtain ETA |
+| Envelope `meta_data` exact keys differ from expected | Spike `tool` command prints raw body; endpoint parses defensively |
+| Ingest lag → waker delay for first message from new contact | Measured in spike; watcher retries |
+| PIT conversation-search/message-fetch shape surprises | Spike `fetch`; fallback: ask volunteer for conversation export to adjust |
+| v3 rate limits force slow polling | Spike measures; adaptive polling; per-tenant keys shard budget |
+| Assistant ignores the tool (prompt adherence) | Prompt snippet + tool description tuned in pilot; waker instruction names the tool explicitly |
+| Customer AI-key limits/dead keys | Live validation + health panel + graceful tool fallback |
+| Sensitive media | In-memory only; no persistence; pilot consent language |
+| Native fix ships | Kill switches + marker; MCP server graduates into native support |
