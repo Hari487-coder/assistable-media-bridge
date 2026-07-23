@@ -1,6 +1,6 @@
 import request from "supertest";
 import { describe, expect, it } from "vitest";
-import { loadConfig } from "../src/config";
+import { loadConfig, type AppConfig } from "../src/config";
 import { buildApp } from "../src/http/app";
 import { runWakerCycle } from "../src/core/waker";
 
@@ -36,5 +36,29 @@ describe("mock-mode e2e", () => {
     });
     expect(tool.status).toBe(200);
     expect(tool.body.result).toContain("Voice note transcript");
+  });
+
+  it("buildApp constructs in non-mock mode and mounts routes without throwing", async () => {
+    const cfg: AppConfig = {
+      port: 0,
+      mock: false,
+      dbPath: ":memory:",
+      encryptionKey: Buffer.alloc(32, 1),
+      v3BaseUrl: "https://app.assistable.ai",
+      ghlBaseUrl: "https://services.leadconnectorhq.com",
+      publicBaseUrl: "https://x",
+    };
+    const { app } = buildApp(cfg);
+
+    // health route is mounted and reports mock=false
+    const health = await request(app).get("/health");
+    expect(health.status).toBe(200);
+    expect(health.body.mock).toBe(false);
+
+    // tool route is mounted in real mode; unknown token short-circuits to 404
+    // BEFORE any real client call, so this exercises real-mode wiring w/o network
+    const tool = await request(app).post("/tool/unknown-token").send({ args: {} });
+    expect(tool.status).toBe(404);
+    expect(tool.body.result).toBeDefined();
   });
 });

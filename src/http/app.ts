@@ -24,7 +24,7 @@ export function buildApp(config: AppConfig) {
   const v3For = (v3Key: string) =>
     mock ? mock.v3Factory() : createV3Client({ baseUrl: config.v3BaseUrl, apiKey: v3Key });
   const ghlFor = (t: Tenant) =>
-    mock ? (mock.ghlFactory(t) as never) : createGhlClient({ baseUrl: config.ghlBaseUrl, pit: t.ghlPit });
+    mock ? mock.ghlFactory(t) : createGhlClient({ baseUrl: config.ghlBaseUrl, pit: t.ghlPit });
   const providerFor = (t: Tenant) =>
     mock ? mock.providerFactory() : getProvider(t.provider, t.aiKey);
   const mediaFetch = mock ? mock.mediaFetch : undefined;
@@ -40,14 +40,14 @@ export function buildApp(config: AppConfig) {
   app.use(createMcpRouter({ tenants, providerFactory: providerFor, mediaFetch }));
   app.use(createPortalRouter({
     tenants, events, publicBaseUrl: config.publicBaseUrl,
-    v3Factory: (key) => v3For(key) as never,
+    v3Factory: (key) => v3For(key),
     ghlFactory: (pit) =>
-      (mock ? mock.ghlFactory() : createGhlClient({ baseUrl: config.ghlBaseUrl, pit })) as never,
+      (mock ? mock.ghlFactory() : createGhlClient({ baseUrl: config.ghlBaseUrl, pit })),
     providerFactory: (name, key) => (mock ? mock.providerFactory() : getProvider(name, key)),
   }));
 
   const wakerDepsFor = (t: Tenant): WakerDeps => ({
-    v3: v3For(t.v3Key) as never, processed, events, state: wakerState,
+    v3: v3For(t.v3Key), processed, events, state: wakerState,
   });
 
   return {
