@@ -21,7 +21,7 @@ function makeApp() {
     providerFactory: () => ({ describe: async () => "transcript!", validateKey: async () => true }),
     mediaFetch: (async () => new Response(oggBytes)) as unknown as typeof fetch,
   }));
-  return { app, token: t.token };
+  return { app, token: t.token, tenants };
 }
 
 const rpc = (method: string, params: unknown, id = 1) => ({ jsonrpc: "2.0", id, method, params });
@@ -58,5 +58,47 @@ describe("mcp endpoint", () => {
       .set("Accept", "application/json, text/event-stream")
       .send(rpc("tools/list", {}));
     expect(res.status).toBe(401);
+  });
+  it("a wrong-media-kind tool call returns a valid JSON-RPC result with isError, not a crash", async () => {
+    // oggBytes sniffs as audio; calling analyze_image on it must error gracefully.
+    const { app, token } = makeApp();
+    const res = await request(app)
+      .post(`/mcp/${token}`)
+      .set("Accept", "application/json, text/event-stream")
+      .send(rpc("tools/call", { name: "analyze_image", arguments: { url: "https://storage.msgsndr.com/a.ogg" } }));
+    expect(res.status).toBe(200);
+    expect(res.body.result.isError).toBe(true);
+    expect(res.body.result.content[0].text).toMatch(/expected image/i);
+  });
+  it("a download failure returns isError, transport stays alive", async () => {
+    const { app, token } = makeApp();
+    const res = await request(app)
+      .post(`/mcp/${token}`)
+      .set("Accept", "application/json, text/event-stream")
+      .send(rpc("tools/call", { name: "analyze_attachment", arguments: { url: "https://evil.example.com/x.ogg" } }));
+    expect(res.status).toBe(200);
+    expect(res.body.result.isError).toBe(true);
+    expect(res.body.result.content[0].text).toMatch(/download failed|disallowed/i);
+  });
+  it("disabled tenant token → 401", async () => {
+    const { app, token, tenants } = makeApp();
+    const t = tenants.getByToken(token)!;
+    tenants.setEnabled(t.id, false);
+    const res = await request(app)
+      .post(`/mcp/${token}`)
+      .set("Accept", "application/json, text/event-stream")
+      .send(rpc("tools/list", {}));
+    expect(res.status).toBe(401);
+  });
+  it("status tool returns the account config", async () => {
+    const { app, token } = makeApp();
+    const res = await request(app)
+      .post(`/mcp/${token}`)
+      .set("Accept", "application/json, text/event-stream")
+      .send(rpc("tools/call", { name: "status", arguments: {} }));
+    expect(res.status).toBe(200);
+    const parsed = JSON.parse(res.body.result.content[0].text);
+    expect(parsed.provider).toBeDefined();
+    expect(parsed.modalities).toBeDefined();
   });
 });

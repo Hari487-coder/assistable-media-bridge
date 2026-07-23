@@ -27,11 +27,12 @@ function buildServer(ctx: McpRouterCtx, tenant: Tenant): McpServer {
     if ("error" in dl) return { error: `download failed: ${dl.error}` };
     return { bytes: dl.bytes, sniffed: sniff(dl.bytes) };
   };
-  const analyze = async (url: string, expect?: "audio" | "image" | "pdf") => {
+  const analyze = async (url: string, expectedKind?: "audio" | "image" | "pdf") => {
     const r = await fetchAndSniff(url);
     if ("error" in r) return errText(r.error);
     if (r.sniffed.kind === "unknown") return errText("unsupported media type");
-    if (expect && r.sniffed.kind !== expect) return errText(`expected ${expect}, got ${r.sniffed.kind}`);
+    if (expectedKind && r.sniffed.kind !== expectedKind)
+      return errText(`expected ${expectedKind}, got ${r.sniffed.kind}`);
     try {
       return text(await provider.describe({ kind: r.sniffed.kind, mime: r.sniffed.mime, bytes: r.bytes }));
     } catch (err) {
@@ -74,7 +75,15 @@ export function createMcpRouter(ctx: McpRouterCtx): Router {
     const transport = new StreamableHTTPServerTransport({
       sessionIdGenerator: undefined, enableJsonResponse: true,
     });
-    res.on("close", () => { void transport.close(); void server.close(); });
+    let cleaned = false;
+    const cleanup = () => {
+      if (cleaned) return;
+      cleaned = true;
+      void transport.close();
+      void server.close();
+    };
+    res.on("finish", cleanup);
+    res.on("close", cleanup);
     await server.connect(transport);
     await transport.handleRequest(req, res, req.body);
   });
