@@ -219,7 +219,7 @@ git add -A && git commit -m "feat: scaffold, config, aes-256-gcm secret crypto"
 
 **Interfaces:**
 - Produces: `openDb(path: string): Database` (better-sqlite3, WAL, schema applied idempotently)
-- Produces: `TenantStore` — `create(input: TenantInput): Tenant`, `getByToken(token: string): Tenant | null`, `getByLocationId(locationId: string): Tenant | null`, `list(): Tenant[]`, `update(id, patch)`, `setEnabled(id, on)`. `Tenant = { id: string; token: string; label: string; locationId: string; assistantId: string; provider: "gemini" | "openai"; v3Key: string; ghlPit: string; aiKey: string; wakerEnabled: boolean; toolId: string | null; enabled: boolean; modalities: { audio: boolean; image: boolean } }` — secrets decrypted on read, encrypted on write.
+- Produces: `TenantStore` — `create(input: TenantInput): Tenant`, `getByToken(token: string): Tenant | null`, `getByLocationId(locationId: string): Tenant | null`, `list(): Tenant[]`, `setEnabled(id, on)`, `setToolId(id, toolId)`, `setWaker(id, on)`. (A general `update(id, patch)` was deliberately dropped 2026-07-23 — no MVP consumer; YAGNI.) `Tenant = { id: string; token: string; label: string; locationId: string; assistantId: string; provider: "gemini" | "openai"; v3Key: string; ghlPit: string; aiKey: string; wakerEnabled: boolean; toolId: string | null; enabled: boolean; modalities: { audio: boolean; image: boolean } }` — secrets decrypted on read, encrypted on write.
 - Produces: `ProcessedStore` — `has(tenantId, messageId): boolean`, `add(tenantId, messageId): void`, `prune(maxAgeMs): number`
 - Produces: `EventStore` — `record(tenantId, kind: string, detail: string): void`, `latest(tenantId, limit): EventRow[]` (`kind` ∈ poll|detect|wake|tool_call|error|validate)
 
