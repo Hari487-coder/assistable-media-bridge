@@ -15,9 +15,11 @@ function makeApp() {
   app.use(createPortalRouter({
     tenants, events, publicBaseUrl: "https://media.example.com",
     v3Factory: () => ({
-      validateKey: async () => true,
+      validateKey: async () => ({ ok: true }),
       listAssistants: async () => [{ id: "A1", name: "Bot" }],
-      createTool: async () => ({ id: "tool_1", raw: {} }),
+      createTool: async () => ({ id: "tool_1", conflict: false, raw: {} }),
+      findToolByName: async () => "tool_1",
+      assignTool: async () => ({ ok: true }),
     }) as never,
     ghlFactory: () => ({ validatePit: async () => true }) as never,
     providerFactory: () => ({ validateKey: async () => true, describe: async () => "" }),

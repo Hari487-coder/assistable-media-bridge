@@ -29,7 +29,7 @@ describe("ghl client", () => {
     expect(rows[1].id).toBe("g0");
     const h = calls[0].init.headers as Record<string, string>;
     expect(h.Authorization).toBe("Bearer P");
-    expect(h.Version).toBe("2021-04-15");
+    expect(h.Version).toBe("2021-07-28");
     expect(calls[0].url).toContain("sortBy=last_message_date");
     expect(calls[0].url).toContain("sort=desc");
   });

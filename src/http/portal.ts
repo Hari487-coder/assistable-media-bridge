@@ -232,6 +232,10 @@ export function createPortalRouter(ctx: PortalCtx): Router {
                 <input id="assistantId" name="assistantId" placeholder="asst_..." required>
               </div>
             </div>
+            <div class="field">
+              <label for="subAccountId">Subaccount ID <span class="hint">— optional, only if your API key covers multiple subaccounts</span></label>
+              <input id="subAccountId" name="subAccountId" placeholder="leave blank for a single-subaccount key">
+            </div>
           </fieldset>
           <fieldset>
             <legend>Credentials</legend>
@@ -270,6 +274,7 @@ export function createPortalRouter(ctx: PortalCtx): Router {
         label: b.label, locationId: b.locationId, assistantId: b.assistantId,
         provider: b.provider === "openai" ? "openai" : "gemini",
         v3Key: b.v3Key, ghlPit: b.ghlPit, aiKey: b.aiKey,
+        ...(b.subAccountId?.trim() ? { subAccountId: b.subAccountId.trim() } : {}),
       });
       const mcpUrl = `${ctx.publicBaseUrl}/mcp/${r.tenant.token}`;
       res.send(shell("Connected", `

@@ -45,10 +45,13 @@ describe("v3 client", () => {
       assistant_id: "a1", conversation_id: "c1", additional_instructions: "[media-mcp] hi",
     });
   });
-  it("validateKey false on 401", async () => {
-    const { impl } = fakeFetch({ "v3/conversations?": { status: 401, body: { error: "unauthorized" } } });
+  it("validateKey returns ok:false with a diagnostic detail on 401", async () => {
+    const { impl } = fakeFetch({ "v3/conversations?": { status: 401, body: { error: { code: "unauthorized", message: "bad key" } } } });
     const v3 = createV3Client({ baseUrl: "https://x", apiKey: "bad", fetchImpl: impl });
-    expect(await v3.validateKey()).toBe(false);
+    const r = await v3.validateKey();
+    expect(r.ok).toBe(false);
+    expect(r.detail).toContain("401");
+    expect(r.detail).toContain("bad key");
   });
   it("lists assistants", async () => {
     const { impl, calls } = fakeFetch({ "v3/assistants": { body: { ok: true, data: { assistants: [{ id: "a1", name: "Bot" }] } } } });
@@ -57,13 +60,52 @@ describe("v3 client", () => {
     expect(rows[0]).toEqual({ id: "a1", name: "Bot" });
     expect(calls[0].url).toContain("v3/assistants?limit=100");
   });
-  it("creates a tool and returns its id", async () => {
+  it("creates a CUSTOM tool with a snake_case body and returns its id", async () => {
     const { impl, calls } = fakeFetch({ "v3/tools": { body: { ok: true, data: { id: "tool_7" } } } });
     const v3 = createV3Client({ baseUrl: "https://x", apiKey: "K", fetchImpl: impl });
-    const r = await v3.createTool({ name: "analyze_attachment", description: "d", url: "https://svc/tool/t", httpMethod: "POST" });
+    const r = await v3.createTool({ name: "analyze_attachment", description: "d", url: "https://svc/tool/t" });
     expect(r.id).toBe("tool_7");
     const body = JSON.parse(String(calls[0].init.body));
-    expect(body.name).toBe("analyze_attachment");
+    expect(body).toMatchObject({
+      name: "analyze_attachment", url: "https://svc/tool/t",
+      http_method: "POST", tool_type: "CUSTOM",
+    });
+  });
+  it("createTool flags a 409 conflict instead of throwing", async () => {
+    const { impl } = fakeFetch({ "v3/tools": { status: 409, body: { error: { code: "conflict", message: "exists" } } } });
+    const v3 = createV3Client({ baseUrl: "https://x", apiKey: "K", fetchImpl: impl });
+    const r = await v3.createTool({ name: "analyze_attachment", description: "d", url: "https://svc/tool/t" });
+    expect(r.conflict).toBe(true);
+    expect(r.id).toBeNull();
+  });
+  it("assignTool posts assistant_id to the assign route", async () => {
+    const { impl, calls } = fakeFetch({ "/assign": { body: { ok: true, data: { assigned: true } } } });
+    const v3 = createV3Client({ baseUrl: "https://x", apiKey: "K", fetchImpl: impl });
+    const r = await v3.assignTool("tool_7", "asst_1");
+    expect(r.ok).toBe(true);
+    expect(calls[0].url).toContain("v3/tools/tool_7/assign");
+    expect(JSON.parse(String(calls[0].init.body))).toMatchObject({ assistant_id: "asst_1" });
+  });
+  it("findToolByName returns the id of an exact name match", async () => {
+    const { impl } = fakeFetch({ "v3/tools?": { body: { ok: true, data: { tools: [
+      { id: "t_other", name: "something_else" },
+      { id: "t_match", name: "analyze_attachment" },
+    ] } } } });
+    const v3 = createV3Client({ baseUrl: "https://x", apiKey: "K", fetchImpl: impl });
+    expect(await v3.findToolByName("analyze_attachment")).toBe("t_match");
+  });
+  it("stamps X-Subaccount-Id header and subaccount_id body when a subaccount is set", async () => {
+    const { impl, calls } = fakeFetch({ "chat/completions": { body: { ok: true, data: {} } } });
+    const v3 = createV3Client({ baseUrl: "https://x", apiKey: "K", subAccountId: "sub_9", fetchImpl: impl });
+    await v3.chatCompletion({ assistantId: "a1", conversationId: "c1", additionalInstructions: "hi" });
+    expect((calls[0].init.headers as Record<string, string>)["X-Subaccount-Id"]).toBe("sub_9");
+    expect(JSON.parse(String(calls[0].init.body)).subaccount_id).toBe("sub_9");
+  });
+  it("omits the subaccount header when none is set (single-key default)", async () => {
+    const { impl, calls } = fakeFetch({ "v3/conversations?": { body: { ok: true, data: { items: [] } } } });
+    const v3 = createV3Client({ baseUrl: "https://x", apiKey: "K", fetchImpl: impl });
+    await v3.listConversations(1);
+    expect((calls[0].init.headers as Record<string, string>)["X-Subaccount-Id"]).toBeUndefined();
   });
   it("chatCompletion returns ok:false when API responds HTTP 200 with ok:false", async () => {
     const { impl } = fakeFetch({ "chat/completions": { body: { ok: false, error: "assistant not found" } } });

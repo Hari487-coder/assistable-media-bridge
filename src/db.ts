@@ -14,6 +14,7 @@ export function openDb(path: string): Db {
       waker_enabled INTEGER NOT NULL DEFAULT 1,
       tool_id TEXT, enabled INTEGER NOT NULL DEFAULT 1,
       audio_on INTEGER NOT NULL DEFAULT 1, image_on INTEGER NOT NULL DEFAULT 1,
+      sub_account_id TEXT,
       created_at INTEGER NOT NULL
     );
     CREATE TABLE IF NOT EXISTS processed (
@@ -26,5 +27,13 @@ export function openDb(path: string): Db {
     );
     CREATE INDEX IF NOT EXISTS idx_events_tenant ON events(tenant_id, id DESC);
   `);
+  // Idempotent migrations for instances created before a column existed.
+  // node:sqlite has no "ADD COLUMN IF NOT EXISTS", so we probe and ignore the
+  // duplicate-column error on an already-migrated DB.
+  for (const stmt of [
+    "ALTER TABLE tenants ADD COLUMN sub_account_id TEXT",
+  ]) {
+    try { db.exec(stmt); } catch { /* column already present */ }
+  }
   return db;
 }

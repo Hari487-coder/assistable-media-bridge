@@ -5,6 +5,8 @@ import { decryptSecret, encryptSecret } from "../crypto";
 export interface TenantInput {
   label: string; locationId: string; assistantId: string;
   provider: "gemini" | "openai"; v3Key: string; ghlPit: string; aiKey: string;
+  /** Optional — only for workspace-wide v3 keys spanning multiple subaccounts. */
+  subAccountId?: string;
 }
 export interface Tenant extends TenantInput {
   id: string; token: string; wakerEnabled: boolean; toolId: string | null;
@@ -16,6 +18,7 @@ type Row = {
   assistant_id: string; provider: string; v3_key_enc: string;
   ghl_pit_enc: string; ai_key_enc: string; waker_enabled: number;
   tool_id: string | null; enabled: number; audio_on: number; image_on: number;
+  sub_account_id: string | null;
 };
 
 export function createTenantStore(db: Db, key: Buffer) {
@@ -28,6 +31,7 @@ export function createTenantStore(db: Db, key: Buffer) {
     wakerEnabled: r.waker_enabled === 1, toolId: r.tool_id,
     enabled: r.enabled === 1,
     modalities: { audio: r.audio_on === 1, image: r.image_on === 1 },
+    ...(r.sub_account_id ? { subAccountId: r.sub_account_id } : {}),
   });
   const get = (sql: string, ...args: (string | number | null)[]): Tenant | null => {
     const r = db.prepare(sql).get(...args) as Row | undefined;
@@ -39,12 +43,12 @@ export function createTenantStore(db: Db, key: Buffer) {
       const token = randomBytes(24).toString("hex");
       db.prepare(`INSERT INTO tenants
         (id, token, label, location_id, assistant_id, provider,
-         v3_key_enc, ghl_pit_enc, ai_key_enc, created_at)
-        VALUES (?,?,?,?,?,?,?,?,?,?)`)
+         v3_key_enc, ghl_pit_enc, ai_key_enc, sub_account_id, created_at)
+        VALUES (?,?,?,?,?,?,?,?,?,?,?)`)
         .run(id, token, input.label, input.locationId, input.assistantId,
           input.provider, encryptSecret(input.v3Key, key),
           encryptSecret(input.ghlPit, key), encryptSecret(input.aiKey, key),
-          Date.now());
+          input.subAccountId ?? null, Date.now());
       const t = get("SELECT * FROM tenants WHERE id = ?", id);
       if (!t) throw new Error("tenant insert failed");
       return t;

@@ -1,8 +1,13 @@
 export interface V3ClientOptions {
-  baseUrl: string; apiKey: string; fetchImpl?: typeof fetch;
+  baseUrl: string;
+  apiKey: string;
+  /** Optional Assistable SubAccount id. Required only for workspace-wide keys
+   *  that span multiple subaccounts; a single-subaccount key resolves itself. */
+  subAccountId?: string;
+  fetchImpl?: typeof fetch;
 }
 
-// Platform envelope may be {ok,data} or bare; lists may be keyed or bare arrays.
+// Platform envelope is { data, error, request_id }; lists may be keyed or bare.
 function unwrap(json: unknown): unknown {
   const j = json as { data?: unknown } | null;
   return j && typeof j === "object" && "data" in j ? j.data : json;
@@ -15,18 +20,35 @@ function items(x: unknown): unknown[] {
   }
   return [];
 }
+// Pull the most useful human string out of the v3 error envelope.
+function errDetail(status: number, json: unknown): string {
+  const e = (json as { error?: { code?: string; message?: string } } | null)?.error;
+  if (e && typeof e === "object" && typeof e.message === "string") {
+    return `HTTP ${status} (${e.code ?? "error"}: ${e.message})`;
+  }
+  const s = typeof json === "string" ? json : JSON.stringify(json ?? "");
+  return `HTTP ${status}${s ? ` — ${s.slice(0, 150)}` : ""}`;
+}
 
 export function createV3Client(opts: V3ClientOptions) {
   const f = opts.fetchImpl ?? fetch;
-  const call = async (method: string, path: string, body?: unknown) => {
+  const call = async (method: string, path: string, body?: Record<string, unknown>) => {
+    // For a workspace-wide key, the subaccount must be named on every request.
+    // Header covers GET; we also stamp it into POST bodies as belt-and-suspenders.
+    const headers: Record<string, string> = {
+      Authorization: `Bearer ${opts.apiKey}`,
+      Accept: "application/json",
+    };
+    if (opts.subAccountId) headers["X-Subaccount-Id"] = opts.subAccountId;
+    let sendBody = body;
+    if (body !== undefined) {
+      headers["Content-Type"] = "application/json";
+      sendBody = opts.subAccountId ? { subaccount_id: opts.subAccountId, ...body } : body;
+    }
     const res = await f(`${opts.baseUrl}/${path}`, {
       method,
-      headers: {
-        Authorization: `Bearer ${opts.apiKey}`,
-        Accept: "application/json",
-        ...(body !== undefined ? { "Content-Type": "application/json" } : {}),
-      },
-      ...(body !== undefined ? { body: JSON.stringify(body) } : {}),
+      headers,
+      ...(sendBody !== undefined ? { body: JSON.stringify(sendBody) } : {}),
     });
     let json: unknown = null;
     try { json = await res.json(); } catch { /* non-JSON error body */ }
@@ -37,7 +59,7 @@ export function createV3Client(opts: V3ClientOptions) {
   return {
     async listConversations(limit: number) {
       const r = await call("GET", `v3/conversations?sort=newest&limit=${limit}`);
-      if (!r.ok) throw new Error(`v3 listConversations ${r.status}`);
+      if (!r.ok) throw new Error(`v3 listConversations ${errDetail(r.status, r.json)}`);
       return items(unwrap(r.json)) as Array<{
         id: string; contactId: string | null; updatedAt: string;
         assistant: { id: string; name?: string } | null;
@@ -45,7 +67,7 @@ export function createV3Client(opts: V3ClientOptions) {
     },
     async listMessages(conversationId: string) {
       const r = await call("GET", `v3/conversations/${conversationId}/messages`);
-      if (!r.ok) throw new Error(`v3 listMessages ${r.status}`);
+      if (!r.ok) throw new Error(`v3 listMessages ${errDetail(r.status, r.json)}`);
       return items(unwrap(r.json)) as Array<{
         id: string; content: string | null; ai: boolean; source: string;
         channel: string | null; createdAt: string;
@@ -59,24 +81,52 @@ export function createV3Client(opts: V3ClientOptions) {
         conversation_id: a.conversationId,
         additional_instructions: a.additionalInstructions,
       });
-      return r.ok ? { ok: true as const } : { ok: false as const, error: `v3 chat ${r.status}: ${JSON.stringify(r.json).slice(0, 200)}` };
+      return r.ok
+        ? { ok: true as const }
+        : { ok: false as const, error: `v3 chat ${errDetail(r.status, r.json)}` };
     },
     async listAssistants() {
       const r = await call("GET", "v3/assistants?limit=100");
-      if (!r.ok) throw new Error(`v3 listAssistants ${r.status}`);
+      if (!r.ok) throw new Error(`v3 listAssistants ${errDetail(r.status, r.json)}`);
       return items(unwrap(r.json)) as Array<{ id: string; name: string }>;
     },
-    async createTool(input: { name: string; description: string; url: string; httpMethod: "POST" }) {
-      const r = await call("POST", "v3/tools", input);
-      if (!r.ok) throw new Error(`v3 createTool ${r.status}: ${JSON.stringify(r.json).slice(0, 200)}`);
+    /** Create a CUSTOM (external-webhook) tool. Body is snake_case per the v3 API. */
+    async createTool(input: { name: string; description: string; url: string }) {
+      const r = await call("POST", "v3/tools", {
+        name: input.name,
+        description: input.description,
+        url: input.url,
+        http_method: "POST",
+        tool_type: "CUSTOM",
+      });
+      if (r.status === 409) return { id: null as string | null, conflict: true as const, raw: r.json };
+      if (!r.ok) throw new Error(`v3 createTool ${errDetail(r.status, r.json)}`);
       const d = unwrap(r.json) as { id?: string } | null;
-      return { id: d?.id ?? null, raw: r.json };
+      return { id: d?.id ?? null, conflict: false as const, raw: r.json };
     },
-    async validateKey(): Promise<boolean> {
+    /** Find an existing tool by exact name (for idempotent re-onboarding). */
+    async findToolByName(name: string): Promise<string | null> {
+      const r = await call("GET", `v3/tools?search=${encodeURIComponent(name)}&limit=100`);
+      if (!r.ok) return null;
+      const rows = items(unwrap(r.json)) as Array<{ id: string; name: string }>;
+      return rows.find((t) => t.name === name)?.id ?? null;
+    },
+    /** Attach a tool to an assistant so the assistant can actually call it. */
+    async assignTool(toolId: string, assistantId: string) {
+      const r = await call("POST", `v3/tools/${toolId}/assign`, { assistant_id: assistantId });
+      return r.ok
+        ? { ok: true as const }
+        : { ok: false as const, error: `v3 assignTool ${errDetail(r.status, r.json)}` };
+    },
+    /** Validate the key against a real scoped call. Returns a diagnostic detail
+     *  so onboarding can tell the user WHY (bad key vs wrong subaccount). */
+    async validateKey(): Promise<{ ok: boolean; detail?: string }> {
       try {
         const r = await call("GET", "v3/conversations?sort=newest&limit=1");
-        return r.ok;
-      } catch { return false; }
+        return r.ok ? { ok: true } : { ok: false, detail: errDetail(r.status, r.json) };
+      } catch (err) {
+        return { ok: false, detail: err instanceof Error ? err.message : "network error" };
+      }
     },
   };
 }

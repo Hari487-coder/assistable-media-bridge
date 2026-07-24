@@ -12,9 +12,11 @@ export function createMockState() {
     wokenConversations,
     bumpConversation() { convUpdatedAt = "2026-07-23T11:00:00Z"; },
     v3Factory: () => ({
-      validateKey: async () => true,
+      validateKey: async () => ({ ok: true as const }),
       listAssistants: async () => [{ id: "mock-asst-1", name: "Mock Bot" }],
-      createTool: async () => ({ id: "mock-tool-1", raw: {} }),
+      createTool: async () => ({ id: "mock-tool-1", conflict: false as const, raw: {} }),
+      findToolByName: async () => "mock-tool-1",
+      assignTool: async () => ({ ok: true as const }),
       listConversations: async () => [
         { id: "mock-conv-1", contactId: "mock-contact-1", updatedAt: convUpdatedAt,
           assistant: { id: "mock-asst-1" } },

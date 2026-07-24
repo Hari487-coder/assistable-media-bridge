@@ -10,7 +10,7 @@ export function createGhlClient(opts: GhlClientOptions) {
     const res = await f(`${opts.baseUrl}${path}`, {
       headers: {
         Authorization: `Bearer ${opts.pit}`,
-        Version: "2021-04-15",
+        Version: "2021-07-28",
         Accept: "application/json",
       },
     });
