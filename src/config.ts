@@ -37,9 +37,17 @@ export function loadConfig(): AppConfig {
   const publicBaseUrl =
     e.PUBLIC_BASE_URL ?? e.RENDER_EXTERNAL_URL ?? "http://localhost:3900";
 
+  // Blueprint instances deployed before de0e9f0 have the portal host (no /v3
+  // routes) frozen into their env snapshot; Render never re-reads render.yaml
+  // env values for existing services, so heal the known-bad value here.
+  const v3BaseUrl = e.V3_BASE_URL.replace(/\/$/, "").replace(
+    /^https:\/\/app\.assistable\.ai$/,
+    "https://api.assistable.ai"
+  );
+
   return {
     port: e.PORT, mock, dbPath: e.DB_PATH, encryptionKey,
-    v3BaseUrl: e.V3_BASE_URL.replace(/\/$/, ""),
+    v3BaseUrl,
     ghlBaseUrl: e.GHL_BASE_URL.replace(/\/$/, ""),
     publicBaseUrl: publicBaseUrl.replace(/\/$/, ""),
   };

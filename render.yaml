@@ -23,7 +23,7 @@ services:
       # zero manual URL configuration.
       - key: WAKER_INTERVAL_MS
         value: "25000"
-      - key: V3_BASE_URL
-        value: https://api.assistable.ai
-      - key: GHL_BASE_URL
-        value: https://services.leadconnectorhq.com
+      # V3_BASE_URL / GHL_BASE_URL intentionally omitted: the code defaults are
+      # authoritative. A pinned value here gets frozen into each blueprint
+      # instance's env snapshot and silently overrides future code fixes
+      # (that is exactly how the app.assistable.ai 404 regression shipped).
