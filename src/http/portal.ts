@@ -220,7 +220,7 @@ export function createPortalRouter(ctx: PortalCtx): Router {
             <legend>Subaccount</legend>
             <div class="field">
               <label for="label">Label <span class="hint">— a name you'll recognize on the dashboard</span></label>
-              <input id="label" name="label" placeholder="e.g. Castiglia Insurance" required>
+              <input id="label" name="label" placeholder="e.g. Main Street Dental" required>
             </div>
             <div class="grid2">
               <div class="field">
