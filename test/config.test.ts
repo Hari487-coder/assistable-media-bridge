@@ -10,7 +10,7 @@ describe("config", () => {
     process.env.ENCRYPTION_KEY = "ab".repeat(32);
     const c = loadConfig();
     expect(c.mock).toBe(true);
-    expect(c.v3BaseUrl).toBe("https://app.assistable.ai");
+    expect(c.v3BaseUrl).toBe("https://api.assistable.ai");
     expect(c.encryptionKey.length).toBe(32);
   });
   it("throws on missing encryption key outside mock mode", () => {

@@ -9,7 +9,7 @@ const envSchema = z.object({
   // SHA-256 below. This lets a one-click Render deploy use `generateValue`
   // (a random alphanumeric string) with no hex requirement on the operator.
   ENCRYPTION_KEY: z.string().min(1).optional(),
-  V3_BASE_URL: z.string().default("https://app.assistable.ai"),
+  V3_BASE_URL: z.string().default("https://api.assistable.ai"),
   GHL_BASE_URL: z.string().default("https://services.leadconnectorhq.com"),
   // Optional: falls back to Render's auto-injected RENDER_EXTERNAL_URL, then
   // localhost. This is the base for the analyze_attachment tool URL registered

@@ -15,7 +15,7 @@ function fakeFetch(routes: Record<string, { status?: number; body: unknown }>) {
 describe("v3 client", () => {
   it("lists conversations through the {ok,data,items} envelope", async () => {
     const { impl, calls } = fakeFetch({
-      "api/v3/conversations?": { body: { ok: true, data: { items: [
+      "v3/conversations?": { body: { ok: true, data: { items: [
         { id: "c1", contactId: "ct1", updatedAt: "2026-07-23T00:00:00Z", assistant: { id: "a1", name: "Bot" } },
       ] } } },
     });
@@ -46,19 +46,19 @@ describe("v3 client", () => {
     });
   });
   it("validateKey false on 401", async () => {
-    const { impl } = fakeFetch({ "api/v3/conversations?": { status: 401, body: { error: "unauthorized" } } });
+    const { impl } = fakeFetch({ "v3/conversations?": { status: 401, body: { error: "unauthorized" } } });
     const v3 = createV3Client({ baseUrl: "https://x", apiKey: "bad", fetchImpl: impl });
     expect(await v3.validateKey()).toBe(false);
   });
   it("lists assistants", async () => {
-    const { impl, calls } = fakeFetch({ "api/v3/assistants": { body: { ok: true, data: { assistants: [{ id: "a1", name: "Bot" }] } } } });
+    const { impl, calls } = fakeFetch({ "v3/assistants": { body: { ok: true, data: { assistants: [{ id: "a1", name: "Bot" }] } } } });
     const v3 = createV3Client({ baseUrl: "https://x", apiKey: "K", fetchImpl: impl });
     const rows = await v3.listAssistants();
     expect(rows[0]).toEqual({ id: "a1", name: "Bot" });
-    expect(calls[0].url).toContain("api/v3/assistants?limit=100");
+    expect(calls[0].url).toContain("v3/assistants?limit=100");
   });
   it("creates a tool and returns its id", async () => {
-    const { impl, calls } = fakeFetch({ "api/v3/tools": { body: { ok: true, data: { id: "tool_7" } } } });
+    const { impl, calls } = fakeFetch({ "v3/tools": { body: { ok: true, data: { id: "tool_7" } } } });
     const v3 = createV3Client({ baseUrl: "https://x", apiKey: "K", fetchImpl: impl });
     const r = await v3.createTool({ name: "analyze_attachment", description: "d", url: "https://svc/tool/t", httpMethod: "POST" });
     expect(r.id).toBe("tool_7");

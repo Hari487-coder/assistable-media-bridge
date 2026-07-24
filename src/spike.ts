@@ -12,7 +12,7 @@ const env = (k: string): string => {
   return v;
 };
 const v3 = () => createV3Client({
-  baseUrl: process.env.V3_BASE_URL ?? "https://app.assistable.ai",
+  baseUrl: process.env.V3_BASE_URL ?? "https://api.assistable.ai",
   apiKey: env("SPIKE_V3_KEY"),
 });
 const ghl = () => createGhlClient({

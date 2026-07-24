@@ -36,7 +36,7 @@ export function createV3Client(opts: V3ClientOptions) {
 
   return {
     async listConversations(limit: number) {
-      const r = await call("GET", `api/v3/conversations?sort=newest&limit=${limit}`);
+      const r = await call("GET", `v3/conversations?sort=newest&limit=${limit}`);
       if (!r.ok) throw new Error(`v3 listConversations ${r.status}`);
       return items(unwrap(r.json)) as Array<{
         id: string; contactId: string | null; updatedAt: string;
@@ -44,7 +44,7 @@ export function createV3Client(opts: V3ClientOptions) {
       }>;
     },
     async listMessages(conversationId: string) {
-      const r = await call("GET", `api/v3/conversations/${conversationId}/messages`);
+      const r = await call("GET", `v3/conversations/${conversationId}/messages`);
       if (!r.ok) throw new Error(`v3 listMessages ${r.status}`);
       return items(unwrap(r.json)) as Array<{
         id: string; content: string | null; ai: boolean; source: string;
@@ -54,7 +54,7 @@ export function createV3Client(opts: V3ClientOptions) {
     async chatCompletion(a: {
       assistantId: string; conversationId: string; additionalInstructions: string;
     }) {
-      const r = await call("POST", "api/v3/chat/completions", {
+      const r = await call("POST", "v3/chat/completions", {
         assistant_id: a.assistantId,
         conversation_id: a.conversationId,
         additional_instructions: a.additionalInstructions,
@@ -62,19 +62,19 @@ export function createV3Client(opts: V3ClientOptions) {
       return r.ok ? { ok: true as const } : { ok: false as const, error: `v3 chat ${r.status}: ${JSON.stringify(r.json).slice(0, 200)}` };
     },
     async listAssistants() {
-      const r = await call("GET", "api/v3/assistants?limit=100");
+      const r = await call("GET", "v3/assistants?limit=100");
       if (!r.ok) throw new Error(`v3 listAssistants ${r.status}`);
       return items(unwrap(r.json)) as Array<{ id: string; name: string }>;
     },
     async createTool(input: { name: string; description: string; url: string; httpMethod: "POST" }) {
-      const r = await call("POST", "api/v3/tools", input);
+      const r = await call("POST", "v3/tools", input);
       if (!r.ok) throw new Error(`v3 createTool ${r.status}: ${JSON.stringify(r.json).slice(0, 200)}`);
       const d = unwrap(r.json) as { id?: string } | null;
       return { id: d?.id ?? null, raw: r.json };
     },
     async validateKey(): Promise<boolean> {
       try {
-        const r = await call("GET", "api/v3/conversations?sort=newest&limit=1");
+        const r = await call("GET", "v3/conversations?sort=newest&limit=1");
         return r.ok;
       } catch { return false; }
     },
