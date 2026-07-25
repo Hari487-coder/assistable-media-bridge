@@ -240,8 +240,9 @@ export function createPortalRouter(ctx: PortalCtx): Router {
           <fieldset>
             <legend>Credentials</legend>
             <div class="field">
-              <label for="v3Key">Assistable v3 API key</label>
-              <input id="v3Key" name="v3Key" type="password" autocomplete="off" required>
+              <label for="v3Key">Assistable v3 API key <span class="hint">— starts with <code>ask_live_</code>; mint one under Dashboard &rarr; Integrations &rarr; API Key</span></label>
+              <input id="v3Key" name="v3Key" type="password" autocomplete="off"
+                pattern="ask_(live|stag)_.+" title="A v3 API key starts with ask_live_ (Dashboard -> Integrations -> API Key). Older portal keys and tokens from other pages will not work." required>
             </div>
             <div class="field">
               <label for="ghlPit">GHL Private Integration Token</label>
