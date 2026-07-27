@@ -37,7 +37,7 @@ export function createMockState() {
     providerFactory: () => ({
       describe: async (i: { kind: string }) =>
         i.kind === "audio" ? "hey, can I move my appointment to Friday?" : "a photo of a receipt",
-      validateKey: async () => true,
+      validateKey: async () => ({ ok: true as const }),
     }),
     mediaFetch: (async () => new Response(OGG)) as unknown as typeof fetch,
   };

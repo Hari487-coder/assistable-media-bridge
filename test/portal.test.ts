@@ -22,7 +22,7 @@ function makeApp() {
       assignTool: async () => ({ ok: true }),
     }) as never,
     ghlFactory: () => ({ validatePit: async () => true }) as never,
-    providerFactory: () => ({ validateKey: async () => true, describe: async () => "" }),
+    providerFactory: () => ({ validateKey: async () => ({ ok: true as const }), describe: async () => "" }),
   }));
   return { app, tenants, events };
 }

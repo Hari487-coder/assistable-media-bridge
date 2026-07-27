@@ -42,10 +42,20 @@ export function openaiProvider(apiKey: string, fetchImpl?: typeof fetch): MediaP
       return text;
     },
     async validateKey() {
+      let res: Response;
       try {
-        const res = await f(`${BASE}/v1/models`, { headers: { Authorization: `Bearer ${apiKey}` } });
-        return res.ok;
-      } catch { return false; }
+        res = await f(`${BASE}/v1/models`, { headers: { Authorization: `Bearer ${apiKey}` } });
+      } catch {
+        return { ok: false, detail: "could not reach the OpenAI API (network)" };
+      }
+      if (res.ok) return { ok: true };
+      let detail = `HTTP ${res.status}`;
+      try {
+        const err = (await res.json()) as { error?: { message?: string } };
+        const message = err.error?.message?.slice(0, 200);
+        if (message) detail += `: ${message}`;
+      } catch { /* non-JSON error body — status alone is still useful */ }
+      return { ok: false, detail };
     },
   };
 }

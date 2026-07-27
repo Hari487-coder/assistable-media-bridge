@@ -18,7 +18,9 @@ describe("gemini adapter", () => {
     const p = getProvider("gemini", "GK", impl);
     const out = await p.describe({ kind: "audio", mime: "audio/ogg", bytes: new Uint8Array([1, 2]) });
     expect(out).toBe("hello world");
-    expect(calls[0].url).toContain(":generateContent?key=GK");
+    expect(calls[0].url).toContain(":generateContent");
+    expect(calls[0].url).not.toContain("GK");
+    expect((calls[0].init.headers as Record<string, string>)["x-goog-api-key"]).toBe("GK");
     const body = JSON.parse(String(calls[0].init.body));
     expect(body.contents[0].parts[0].inline_data.mime_type).toBe("audio/ogg");
   });
@@ -84,14 +86,35 @@ describe("error handling", () => {
     const form = calls[0].init.body as FormData;
     expect((form.get("file") as File).name).toBe("audio.wav");
   });
+  it("gemini validateKey hits the models list with a header key, not generateContent", async () => {
+    const { impl, calls } = capture({ models: [] });
+    const p = getProvider("gemini", "GK", impl);
+    expect(await p.validateKey()).toEqual({ ok: true });
+    expect(calls[0].url).toContain("/v1beta/models");
+    expect(calls[0].url).not.toContain("generateContent");
+    expect(calls[0].url).not.toContain("GK");
+    expect((calls[0].init.headers as Record<string, string>)["x-goog-api-key"]).toBe("GK");
+  });
+  it("gemini validateKey surfaces Google's error status and message", async () => {
+    const impl = (async () =>
+      new Response(
+        JSON.stringify({ error: { status: "INVALID_ARGUMENT", message: "API key not valid. Please pass a valid API key." } }),
+        { status: 400 },
+      )) as unknown as typeof fetch;
+    const p = getProvider("gemini", "GK", impl);
+    const r = await p.validateKey();
+    expect(r.ok).toBe(false);
+    expect(r.detail).toBe("HTTP 400 INVALID_ARGUMENT: API key not valid. Please pass a valid API key.");
+  });
   it("validateKey reflects provider reachability", async () => {
-    const gOk = getProvider("gemini", "GK", capture({ candidates: [{ content: { parts: [{ text: "ok" }] } }] }).impl);
-    expect(await gOk.validateKey()).toBe(true);
     const gBad = getProvider("gemini", "GK", (async () => { throw new Error("x"); }) as unknown as typeof fetch);
-    expect(await gBad.validateKey()).toBe(false);
+    expect((await gBad.validateKey()).ok).toBe(false);
     const oOk = getProvider("openai", "OK", (async () => new Response("{}", { status: 200 })) as unknown as typeof fetch);
-    expect(await oOk.validateKey()).toBe(true);
-    const oBad = getProvider("openai", "OK", (async () => new Response("{}", { status: 401 })) as unknown as typeof fetch);
-    expect(await oBad.validateKey()).toBe(false);
+    expect(await oOk.validateKey()).toEqual({ ok: true });
+    const oBad = getProvider("openai", "OK",
+      (async () => new Response(JSON.stringify({ error: { message: "Incorrect API key provided" } }), { status: 401 })) as unknown as typeof fetch);
+    const r = await oBad.validateKey();
+    expect(r.ok).toBe(false);
+    expect(r.detail).toBe("HTTP 401: Incorrect API key provided");
   });
 });

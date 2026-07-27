@@ -32,7 +32,7 @@ function deps(v3?: ReturnType<typeof makeV3>, over: Partial<Record<string, unkno
       publicBaseUrl: "https://media.example.com",
       v3Factory: () => v.client,
       ghlFactory: () => ({ validatePit: async () => true }),
-      providerFactory: () => ({ validateKey: async () => true, describe: async () => "" }),
+      providerFactory: () => ({ validateKey: async () => ({ ok: true as const }), describe: async () => "" }),
       ...over,
     },
   };

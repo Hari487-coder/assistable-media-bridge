@@ -1,7 +1,8 @@
 export interface MediaInput { kind: "audio" | "image" | "pdf"; mime: string; bytes: Uint8Array }
+export interface KeyCheck { ok: boolean; detail?: string }
 export interface MediaProvider {
   describe(input: MediaInput): Promise<string>;
-  validateKey(): Promise<boolean>;
+  validateKey(): Promise<KeyCheck>;
 }
 export const PROMPTS = {
   audio: "Transcribe this voice message verbatim. Reply with ONLY the transcript text.",

@@ -8,13 +8,14 @@ export function geminiProvider(apiKey: string, fetchImpl?: typeof fetch): MediaP
   const generate = async (parts: unknown[]) => {
     let res: Response;
     try {
-      res = await f(`${BASE}/v1beta/models/${MODEL}:generateContent?key=${apiKey}`, {
+      // Key travels in a header, never the URL — URLs end up in logs and proxies.
+      res = await f(`${BASE}/v1beta/models/${MODEL}:generateContent`, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: { "Content-Type": "application/json", "x-goog-api-key": apiKey },
         body: JSON.stringify({ contents: [{ parts }] }),
       });
     } catch {
-      // Never propagate the raw error — the request URL embeds the API key.
+      // Never propagate the raw error — it may embed request details.
       throw new Error("gemini request failed (network)");
     }
     if (!res.ok) throw new Error(`gemini ${res.status}`);
@@ -33,8 +34,27 @@ export function geminiProvider(apiKey: string, fetchImpl?: typeof fetch): MediaP
         { text: PROMPTS[input.kind] },
       ]),
     async validateKey() {
-      try { await generate([{ text: "Reply with the single word: ok" }]); return true; }
-      catch { return false; }
+      // Key-only check against the models list — independent of any specific
+      // model name (a retired GEMINI_MODEL must not fail key validation) and
+      // free of generation quota. Mirrors the OpenAI provider's approach.
+      let res: Response;
+      try {
+        res = await f(`${BASE}/v1beta/models?pageSize=1`, {
+          headers: { "x-goog-api-key": apiKey },
+        });
+      } catch {
+        return { ok: false, detail: "could not reach the Gemini API (network)" };
+      }
+      if (res.ok) return { ok: true };
+      let detail = `HTTP ${res.status}`;
+      try {
+        const err = (await res.json()) as { error?: { status?: string; message?: string } };
+        const status = err.error?.status;
+        const message = err.error?.message?.slice(0, 200);
+        if (status) detail += ` ${status}`;
+        if (message) detail += `: ${message}`;
+      } catch { /* non-JSON error body — status alone is still useful */ }
+      return { ok: false, detail };
     },
   };
 }

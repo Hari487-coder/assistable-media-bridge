@@ -18,7 +18,7 @@ function makeApp() {
   app.use(express.json());
   app.use(createMcpRouter({
     tenants,
-    providerFactory: () => ({ describe: async () => "transcript!", validateKey: async () => true }),
+    providerFactory: () => ({ describe: async () => "transcript!", validateKey: async () => ({ ok: true as const }) }),
     mediaFetch: (async () => new Response(oggBytes)) as unknown as typeof fetch,
   }));
   return { app, token: t.token, tenants };

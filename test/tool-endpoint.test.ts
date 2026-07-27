@@ -35,7 +35,7 @@ function makeApp(overrides?: Partial<ToolRouterCtx>) {
     }) as never,
     providerFactory: () => ({
       describe: async () => "voice says hi",
-      validateKey: async () => true,
+      validateKey: async () => ({ ok: true as const }),
     }),
     mediaFetch: (async () => new Response(oggBytes)) as unknown as typeof fetch,
     ...overrides,

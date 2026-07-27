@@ -37,8 +37,11 @@ export async function provisionTenant(deps: ProvisionDeps, input: TenantInput) {
   if (!(await deps.ghlFactory(input.ghlPit).validatePit(input.locationId))) {
     throw new Error("GHL Private Integration Token failed validation for this location");
   }
-  if (!(await deps.providerFactory(input.provider, input.aiKey).validateKey())) {
-    throw new Error(`${input.provider} API key failed validation`);
+  const providerCheck = await deps.providerFactory(input.provider, input.aiKey).validateKey();
+  if (!providerCheck.ok) {
+    throw new Error(
+      `${input.provider} API key failed validation${providerCheck.detail ? ` — ${providerCheck.detail}` : ""}`
+    );
   }
 
   // 2. Persist the tenant (secrets encrypted at rest).

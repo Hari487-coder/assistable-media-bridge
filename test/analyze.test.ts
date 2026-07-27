@@ -27,7 +27,7 @@ function deps(overrides: Partial<Record<string, unknown>> = {}) {
     events: createEventStore(db),
     provider: {
       describe: async () => "hello from the voice note",
-      validateKey: async () => true,
+      validateKey: async () => ({ ok: true as const }),
     },
     fetchImpl: (async () => new Response(oggBytes)) as unknown as typeof fetch,
     ...overrides,
@@ -52,7 +52,7 @@ describe("analyzeForContact", () => {
   it("degrades per-attachment on provider failure without throwing", async () => {
     const d = deps({ provider: {
       describe: async () => { throw new Error("rate limited"); },
-      validateKey: async () => true,
+      validateKey: async () => ({ ok: true as const }),
     } });
     const r = await analyzeForContact(d as never, tenant, "C1");
     expect(r.text).toContain("could not be read");
