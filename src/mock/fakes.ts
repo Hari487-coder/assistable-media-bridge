@@ -31,7 +31,8 @@ export function createMockState() {
     ghlFactory: (_tenant?: Tenant) => ({
       validatePit: async () => true,
       latestMediaMessages: async () => [
-        { id: "gmsg-1", attachments: ["https://storage.msgsndr.com/mock.ogg"],
+        { id: "gmsg-1", convId: "mock-conv-1",
+          attachments: ["https://storage.msgsndr.com/mock.ogg"],
           direction: "inbound", dateAdded: "t1" },
       ],
     }),

@@ -37,6 +37,22 @@ function readContext(body: Record<string, unknown>): { contactId?: string; locat
 
 export function createToolRouter(ctx: ToolRouterCtx): Router {
   const router = Router();
+  // The assistant fires analyze_attachment several times per run (and runs can
+  // overlap), so unserialized calls race: both read GHL before either marks,
+  // and the same attachment gets downloaded and billed to Gemini twice.
+  // Serialize per tenant+contact; the queue entry is removed when its chain
+  // drains so the map cannot grow unboundedly.
+  const inFlight = new Map<string, Promise<void>>();
+  const serialized = <T>(key: string, work: () => Promise<T>): Promise<T> => {
+    const prev = inFlight.get(key) ?? Promise.resolve();
+    const run = prev.then(work, work);
+    const link = run.then(() => undefined, () => undefined); // failures never break the chain
+    inFlight.set(key, link);
+    void link.then(() => {
+      if (inFlight.get(key) === link) inFlight.delete(key);
+    });
+    return run;
+  };
   router.post("/tool/:token", async (req, res) => {
     try {
       const tenant = ctx.tenants.getByToken(req.params.token);
@@ -56,15 +72,17 @@ export function createToolRouter(ctx: ToolRouterCtx): Router {
         return;
       }
       try {
-        const out = await analyzeForContact(
-          {
-            ghl: ctx.ghlFactory(tenant),
-            processed: ctx.processed,
-            events: ctx.events,
-            provider: ctx.providerFactory(tenant),
-            fetchImpl: ctx.mediaFetch,
-          },
-          tenant, contactId
+        const out = await serialized(`${tenant.id}:${contactId}`, () =>
+          analyzeForContact(
+            {
+              ghl: ctx.ghlFactory(tenant),
+              processed: ctx.processed,
+              events: ctx.events,
+              provider: ctx.providerFactory(tenant),
+              fetchImpl: ctx.mediaFetch,
+            },
+            tenant, contactId
+          )
         );
         res.json({ result: out.text });
       } catch (err) {

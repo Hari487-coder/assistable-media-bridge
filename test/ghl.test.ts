@@ -33,6 +33,38 @@ describe("ghl client", () => {
     expect(calls[0].url).toContain("sortBy=last_message_date");
     expect(calls[0].url).toContain("sort=desc");
   });
+  it("merges media across a contact's multiple conversation threads, deduped by id", async () => {
+    // Observed live: consecutive tool calls saw disjoint message sets because
+    // search flip-flopped which thread ranked first. The merged view must be
+    // identical regardless of conversation order.
+    const { impl } = fakeFetch({
+      "/conversations/search": { conversations: [{ id: "convA" }, { id: "convB" }] },
+      "/conversations/convA/messages": { messages: { messages: [
+        { id: "a1", direction: "inbound", attachments: ["https://cdn/a1.jpg"], dateAdded: "2026-07-30T06:11:00Z" },
+        { id: "shared", direction: "inbound", attachments: ["https://cdn/s.jpg"], dateAdded: "2026-07-30T06:01:00Z" },
+      ] } },
+      "/conversations/convB/messages": { messages: { messages: [
+        { id: "b1", direction: "inbound", attachments: ["https://cdn/b1.jpg"], dateAdded: "2026-07-30T06:19:00Z" },
+        { id: "shared", direction: "inbound", attachments: ["https://cdn/s.jpg"], dateAdded: "2026-07-30T06:01:00Z" },
+      ] } },
+    });
+    const ghl = createGhlClient({ baseUrl: "https://g", pit: "P", fetchImpl: impl });
+    const rows = await ghl.latestMediaMessages({ locationId: "L", contactId: "C" });
+    expect(rows.map((r) => r.id)).toEqual(["b1", "a1", "shared"]);
+    expect(rows[0].convId).toBe("convB");
+  });
+  it("tolerates one thread's messages fetch failing when another succeeds", async () => {
+    const { impl } = fakeFetch({
+      "/conversations/search": { conversations: [{ id: "convDead" }, { id: "convOk" }] },
+      // convDead has no route → 404 from fakeFetch
+      "/conversations/convOk/messages": { messages: { messages: [
+        { id: "ok1", direction: "inbound", attachments: ["https://cdn/x.jpg"], dateAdded: "t1" },
+      ] } },
+    });
+    const ghl = createGhlClient({ baseUrl: "https://g", pit: "P", fetchImpl: impl });
+    const rows = await ghl.latestMediaMessages({ locationId: "L", contactId: "C" });
+    expect(rows.map((r) => r.id)).toEqual(["ok1"]);
+  });
   it("returns [] when contact has no conversations", async () => {
     const { impl } = fakeFetch({ "/conversations/search": { conversations: [] } });
     const ghl = createGhlClient({ baseUrl: "https://g", pit: "P", fetchImpl: impl });

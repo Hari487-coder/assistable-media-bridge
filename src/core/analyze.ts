@@ -33,9 +33,15 @@ export async function analyzeForContact(
   if (fresh.length === 0) {
     deps.events.record(
       tenant.id, "tool_skip",
-      `contact=${contactId} no new attachments (ghl returned ${messages.length} media messages)`
+      `contact=${contactId} no new attachments (ghl returned ${messages.length}: ${describeIds(messages)})`
     );
-    return { text: "[no new attachments found]", processedIds: [] };
+    // Already-read is NOT a failure — steer the assistant back to the results
+    // it already has instead of letting it tell the contact "I can't read
+    // images" (observed live: the model treated this note as an error).
+    return {
+      text: "[no new attachments — every attachment was already read; their contents are in earlier analyze_attachment results in this conversation. Answer from those.]",
+      processedIds: [],
+    };
   }
 
   const sections: string[] = [];
@@ -82,7 +88,9 @@ export async function analyzeForContact(
       } catch (err) {
         // Blanket guard: NOTHING inside the per-attachment body may throw out
         // of analyzeForContact — every failure degrades to a bracketed note.
-        sections.push(`[attachment could not be read: ${err instanceof Error ? err.message : "processing_error"}]`);
+        const reason = err instanceof Error ? err.message : "processing_error";
+        deps.events.record(tenant.id, "error", `tool attachment failed: ${reason} (msg ${msg.id})`);
+        sections.push(`[attachment could not be read: ${reason}]`);
       }
     }
   }
@@ -98,6 +106,16 @@ export async function analyzeForContact(
   }
   const processedIds = fresh.map((m) => m.id);
   for (const id of processedIds) deps.processed.add(tenant.id, id);
-  deps.events.record(tenant.id, "tool_call", `attachments=${count} messages=${processedIds.length}`);
+  deps.events.record(
+    tenant.id, "tool_call",
+    `attachments=${count} messages=${processedIds.length}: ${describeIds(fresh)}`
+  );
   return { text: sections.join("\n\n"), processedIds };
+}
+
+// Compact identity trail for the event feed: which message (and which
+// conversation thread, when known) a call actually saw. This is what turns
+// "0 fresh, then 2 fresh, half a second apart" from a mystery into a diagnosis.
+function describeIds(msgs: Array<{ id: string; convId?: string }>): string {
+  return msgs.map((m) => (m.convId ? `${m.id}@${m.convId}` : m.id)).join(",");
 }

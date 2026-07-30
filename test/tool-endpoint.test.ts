@@ -52,6 +52,35 @@ describe("POST /tool/:token", () => {
     expect(res.status).toBe(200);
     expect(res.body.result).toContain("voice says hi");
   });
+  it("serializes concurrent calls for the same contact — no double-processing race", async () => {
+    // Two simultaneous tool calls: without the per-contact lock both read GHL
+    // before either marks, and the same attachment is billed to Gemini twice.
+    let inFlight = 0;
+    let maxInFlight = 0;
+    let describeCalls = 0;
+    const { app, token } = makeApp({
+      providerFactory: () => ({
+        describe: async () => {
+          inFlight += 1; maxInFlight = Math.max(maxInFlight, inFlight);
+          describeCalls += 1;
+          await new Promise((r) => setTimeout(r, 20));
+          inFlight -= 1;
+          return "voice says hi";
+        },
+        validateKey: async () => ({ ok: true as const }),
+      }),
+    });
+    const body = { args: {}, meta_data: { contact_id: "C1", location_id: "L1" }, metadata: {}, call: null };
+    const [r1, r2] = await Promise.all([
+      request(app).post(`/tool/${token}`).send(body),
+      request(app).post(`/tool/${token}`).send(body),
+    ]);
+    expect(maxInFlight).toBe(1); // never overlapped
+    expect(describeCalls).toBe(1); // second call saw the mark, did not re-read
+    const results = [r1.body.result, r2.body.result].sort();
+    expect(results.some((r) => r.includes("voice says hi"))).toBe(true);
+    expect(results.some((r) => r.includes("no new attachments"))).toBe(true);
+  });
   it("tolerates camelCase metadata keys", async () => {
     const { app, token } = makeApp();
     const res = await request(app).post(`/tool/${token}`).send({
