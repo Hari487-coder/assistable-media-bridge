@@ -24,6 +24,17 @@ describe("gemini adapter", () => {
     const body = JSON.parse(String(calls[0].init.body));
     expect(body.contents[0].parts[0].inline_data.mime_type).toBe("audio/ogg");
   });
+  it("sends images as inline_data with the OCR prompt", async () => {
+    const { impl, calls } = capture({
+      candidates: [{ content: { parts: [{ text: "a red card on a wooden table" }] } }],
+    });
+    const p = getProvider("gemini", "GK", impl);
+    const out = await p.describe({ kind: "image", mime: "image/jpeg", bytes: new Uint8Array([0xff, 0xd8, 0xff]) });
+    expect(out).toBe("a red card on a wooden table");
+    const body = JSON.parse(String(calls[0].init.body));
+    expect(body.contents[0].parts[0].inline_data.mime_type).toBe("image/jpeg");
+    expect(body.contents[0].parts[1].text).toMatch(/OCR/);
+  });
 });
 
 describe("openai adapter", () => {

@@ -75,8 +75,39 @@ describe("analyzeForContact", () => {
     expect(noteMatches).toHaveLength(1);
     expect(r.text).toContain("[3 additional attachment(s) were not processed]");
     expect((r.text.match(/Voice note transcript/g) ?? [])).toHaveLength(3);
-    expect(r.processedIds).toEqual(["gA", "gB"]);
+    // Chronological processing: the older gB (t1) is read before gA (t2).
+    expect(r.processedIds).toEqual(["gB", "gA"]);
     expect(d.processed.has("t1", "gB")).toBe(true);
+  });
+  it("handles a mixed voice-note + image burst in the order the contact sent it", async () => {
+    const pngBytes = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+    const described: string[] = [];
+    const d = deps({
+      ghl: {
+        // GHL order: newest first (image last-sent → first in the list).
+        latestMediaMessages: async () => [
+          { id: "gImg", attachments: ["https://storage.msgsndr.com/photo.png"], direction: "inbound", dateAdded: "t3" },
+          { id: "gVoice", attachments: ["https://storage.msgsndr.com/note.ogg"], direction: "inbound", dateAdded: "t2" },
+        ],
+        validatePit: async () => true,
+      },
+      provider: {
+        describe: async (i: { kind: string; mime: string }) => {
+          described.push(`${i.kind}:${i.mime}`);
+          return i.kind === "image" ? "a photo of a red card" : "see you friday";
+        },
+        validateKey: async () => ({ ok: true as const }),
+      },
+      fetchImpl: (async (url: string) =>
+        new Response(String(url).endsWith(".png") ? pngBytes : oggBytes)) as unknown as typeof fetch,
+    });
+    const r = await analyzeForContact(d as never, tenant, "C1");
+    expect(r.text).toContain("🎤 Voice note transcript: see you friday");
+    expect(r.text).toContain("📷 Image: a photo of a red card");
+    // Voice note (t2) must be read before the image (t3).
+    expect(r.text.indexOf("Voice note transcript")).toBeLessThan(r.text.indexOf("📷 Image"));
+    expect(described).toEqual(["audio:audio/ogg", "image:image/png"]);
+    expect(r.processedIds).toEqual(["gVoice", "gImg"]);
   });
   it("message with zero attachments yields no-new-attachments and marks nothing", async () => {
     const d = deps({ ghl: {

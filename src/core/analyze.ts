@@ -23,7 +23,13 @@ export async function analyzeForContact(
   const messages = await deps.ghl.latestMediaMessages({
     locationId: tenant.locationId, contactId,
   });
-  const fresh = messages.filter((m) => !deps.processed.has(tenant.id, m.id));
+  // GHL returns newest-first (that's the right window to fetch), but the
+  // assistant should READ a multi-attachment burst in the order the contact
+  // sent it — three voice notes then a photo must not arrive photo-first
+  // with the story reversed.
+  const fresh = messages
+    .filter((m) => !deps.processed.has(tenant.id, m.id))
+    .sort((a, b) => (a.dateAdded < b.dateAdded ? -1 : a.dateAdded > b.dateAdded ? 1 : 0));
   if (fresh.length === 0) {
     deps.events.record(
       tenant.id, "tool_skip",
