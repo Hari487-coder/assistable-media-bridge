@@ -45,6 +45,21 @@ describe("portal", () => {
     expect(res.text).toContain("/mcp/");
     expect(res.text).toContain("analyze_attachment");
   });
+  it("POST /setup twice for one location reconnects instead of adding a second tenant", async () => {
+    const { app, tenants } = makeApp();
+    const form = {
+      label: "Vol", locationId: "L1", assistantId: "A1",
+      provider: "gemini", v3Key: "v", ghlPit: "p", aiKey: "k",
+    };
+    await request(app).post("/setup").type("form").send(form);
+    const res = await request(app).post("/setup").type("form").send({ ...form, label: "Vol 2" });
+
+    expect(res.status).toBe(200);
+    expect(res.text).toContain("Reconnected");
+    expect(res.text).toContain("already connected");
+    expect(tenants.list()).toHaveLength(1);
+    expect(tenants.getByLocationId("L1")?.label).toBe("Vol 2");
+  });
   it("dashboard shows health events", async () => {
     const { app, tenants, events } = makeApp();
     const t = tenants.create({

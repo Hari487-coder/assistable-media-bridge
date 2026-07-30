@@ -37,21 +37,64 @@ export function createTenantStore(db: Db, key: Buffer) {
     const r = db.prepare(sql).get(...args) as Row | undefined;
     return r ? toTenant(r) : null;
   };
+  const create = (input: TenantInput): Tenant => {
+    const id = randomUUID();
+    const token = randomBytes(24).toString("hex");
+    db.prepare(`INSERT INTO tenants
+      (id, token, label, location_id, assistant_id, provider,
+       v3_key_enc, ghl_pit_enc, ai_key_enc, sub_account_id, created_at)
+      VALUES (?,?,?,?,?,?,?,?,?,?,?)`)
+      .run(id, token, input.label, input.locationId, input.assistantId,
+        input.provider, encryptSecret(input.v3Key, key),
+        encryptSecret(input.ghlPit, key), encryptSecret(input.aiKey, key),
+        input.subAccountId ?? null, Date.now());
+    const t = get("SELECT * FROM tenants WHERE id = ?", id);
+    if (!t) throw new Error("tenant insert failed");
+    return t;
+  };
+
+  // Rewrite an existing tenant's configuration in place. Deliberately keeps id,
+  // token, kill switches and created_at: the token is baked into a LIVE
+  // analyze_attachment tool URL in the customer's subaccount, and the id keys
+  // the waker cursor, the processed-message dedupe and the event history. Minting
+  // a new row instead would orphan the tool and re-wake everything already read.
+  const update = (id: string, input: TenantInput): Tenant => {
+    const prev = get("SELECT * FROM tenants WHERE id = ?", id);
+    if (!prev) throw new Error("tenant not found");
+    const subAccountId = input.subAccountId ?? null;
+    // A tool lives inside ONE subaccount. If a reconnect moves the tenant, the
+    // stored toolId points somewhere this key can no longer reach — drop it so
+    // the waker stops trying to assign a foreign tool and ensureTool re-creates
+    // it in the new subaccount.
+    const movedSubAccount = subAccountId !== (prev.subAccountId ?? null);
+    db.prepare(`UPDATE tenants SET
+        label = ?, location_id = ?, assistant_id = ?, provider = ?,
+        v3_key_enc = ?, ghl_pit_enc = ?, ai_key_enc = ?, sub_account_id = ?
+        ${movedSubAccount ? ", tool_id = NULL" : ""}
+      WHERE id = ?`)
+      .run(input.label, input.locationId, input.assistantId, input.provider,
+        encryptSecret(input.v3Key, key), encryptSecret(input.ghlPit, key),
+        encryptSecret(input.aiKey, key), subAccountId, id);
+    const t = get("SELECT * FROM tenants WHERE id = ?", id);
+    if (!t) throw new Error("tenant update failed");
+    return t;
+  };
+
   return {
-    create(input: TenantInput): Tenant {
-      const id = randomUUID();
-      const token = randomBytes(24).toString("hex");
-      db.prepare(`INSERT INTO tenants
-        (id, token, label, location_id, assistant_id, provider,
-         v3_key_enc, ghl_pit_enc, ai_key_enc, sub_account_id, created_at)
-        VALUES (?,?,?,?,?,?,?,?,?,?,?)`)
-        .run(id, token, input.label, input.locationId, input.assistantId,
-          input.provider, encryptSecret(input.v3Key, key),
-          encryptSecret(input.ghlPit, key), encryptSecret(input.aiKey, key),
-          input.subAccountId ?? null, Date.now());
-      const t = get("SELECT * FROM tenants WHERE id = ?", id);
-      if (!t) throw new Error("tenant insert failed");
-      return t;
+    create,
+    update,
+    /**
+     * Onboarding is idempotent per GHL location: re-submitting the form for a
+     * location that is already connected updates it instead of adding a second
+     * row. Lookup and write are one SYNCHRONOUS step — node:sqlite is sync and
+     * Node is single-threaded, so two concurrent submissions cannot interleave
+     * between the read and the write and both insert.
+     */
+    createOrUpdateByLocation(input: TenantInput): { tenant: Tenant; reconnected: boolean } {
+      const existing = get("SELECT * FROM tenants WHERE location_id = ?", input.locationId);
+      return existing
+        ? { tenant: update(existing.id, input), reconnected: true }
+        : { tenant: create(input), reconnected: false };
     },
     getByToken: (token: string) => get("SELECT * FROM tenants WHERE token = ?", token),
     getByLocationId: (loc: string) => get("SELECT * FROM tenants WHERE location_id = ?", loc),

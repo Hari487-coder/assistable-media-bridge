@@ -123,4 +123,38 @@ describe("provisionTenant", () => {
     const r = await provisionTenant(ctx as never, { ...input, subAccountId: "sub_42" });
     expect(ctx.tenants.getByToken(r.tenant.token)?.subAccountId).toBe("sub_42");
   });
+  it("re-onboarding the same GHL location reconnects instead of duplicating", async () => {
+    // Two rows for one location = two waker cursors = the contact gets two AI
+    // replies and every attachment is billed to the provider twice.
+    const { ctx } = deps();
+    const first = await provisionTenant(ctx as never, input);
+    expect(first.reconnected).toBe(false);
+
+    const second = await provisionTenant(ctx as never, { ...input, label: "Vol 1 (again)" });
+    expect(second.reconnected).toBe(true);
+    expect(second.tenant.id).toBe(first.tenant.id);
+    expect(second.tenant.token).toBe(first.tenant.token); // the live tool URL still resolves
+    expect(ctx.tenants.list()).toHaveLength(1);
+    expect(ctx.tenants.getByToken(first.tenant.token)?.label).toBe("Vol 1 (again)");
+  });
+  it("a failed reconnect leaves the working tenant untouched", async () => {
+    // Validation runs before any write, so pasting a dead key while trying to
+    // reconnect must not take a live subaccount down.
+    const { ctx } = deps();
+    const good = await provisionTenant(ctx as never, input);
+
+    const badCtx = {
+      ...ctx,
+      v3Factory: () => makeV3({
+        validateKey: async () => ({ ok: false as const, detail: "HTTP 401" }),
+      }).client,
+    };
+    await expect(
+      provisionTenant(badCtx as never, { ...input, label: "clobbered", v3Key: "dead" })
+    ).rejects.toThrow(/failed validation/i);
+
+    const still = ctx.tenants.getByToken(good.tenant.token);
+    expect(still?.label).toBe("Vol 1");
+    expect(still?.v3Key).toBe("v3");
+  });
 });

@@ -35,5 +35,30 @@ export function openDb(path: string): Db {
   ]) {
     try { db.exec(stmt); } catch { /* column already present */ }
   }
+
+  // One tenant per GHL location. Without it a double-submitted onboarding form
+  // leaves two rows for the same location, each with its OWN waker cursor and
+  // its own processed-message set: every conversation is woken twice and every
+  // attachment is downloaded and billed to the AI provider twice, silently.
+  // Added as an index rather than a table constraint so existing deployments
+  // pick it up on restart.
+  try {
+    db.exec("CREATE UNIQUE INDEX IF NOT EXISTS idx_tenants_location ON tenants(location_id)");
+  } catch {
+    // An instance that ALREADY holds duplicates cannot take the index. Merging
+    // them automatically would destroy a token that is baked into a live tool
+    // URL, so name them instead and let a human pick the survivor.
+    let detail = "(could not list them)";
+    try {
+      const dupes = db.prepare(
+        "SELECT location_id, COUNT(*) AS n FROM tenants GROUP BY location_id HAVING n > 1"
+      ).all() as Array<{ location_id: string; n: number }>;
+      detail = dupes.map((d) => `${d.location_id} (x${d.n})`).join(", ");
+    } catch { /* keep the placeholder — the warning still needs to fire */ }
+    console.warn(
+      "[media-mcp] duplicate tenants share a GHL location; each one wakes and bills " +
+      `independently. Delete the stale row(s) for: ${detail}`
+    );
+  }
   return db;
 }

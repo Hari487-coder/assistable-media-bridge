@@ -37,6 +37,52 @@ describe("tenant store", () => {
     tenants.setEnabled(t.id, false);
     expect(tenants.getByToken(t.token)?.enabled).toBe(false);
   });
+  it("rejects a second row for the same GHL location at the DB level", () => {
+    const { tenants, db } = mk();
+    tenants.create(input);
+    // The unique index is the backstop behind createOrUpdateByLocation: even a
+    // direct insert must not produce two tenants for one location.
+    expect(() => tenants.create({ ...input, label: "dupe" })).toThrow();
+    expect((db.prepare("SELECT COUNT(*) AS n FROM tenants").get() as { n: number }).n).toBe(1);
+  });
+});
+
+describe("tenant store — reconnect by location", () => {
+  it("creates on first sight, then updates in place keeping id and token", () => {
+    const { tenants, db } = mk();
+    const first = tenants.createOrUpdateByLocation(input);
+    expect(first.reconnected).toBe(false);
+
+    tenants.setToolId(first.tenant.id, "tool_1");
+    tenants.setWaker(first.tenant.id, false);
+
+    const again = tenants.createOrUpdateByLocation({
+      ...input, label: "Renamed", assistantId: "asst_2", aiKey: "gk2",
+    });
+    expect(again.reconnected).toBe(true);
+    // Same identity — the live tool URL and the waker/dedupe history survive.
+    expect(again.tenant.id).toBe(first.tenant.id);
+    expect(again.tenant.token).toBe(first.tenant.token);
+    expect(again.tenant.toolId).toBe("tool_1");
+    expect(again.tenant.wakerEnabled).toBe(false);
+    // ...but the configuration and secrets are the new ones.
+    expect(again.tenant.label).toBe("Renamed");
+    expect(again.tenant.assistantId).toBe("asst_2");
+    expect(again.tenant.aiKey).toBe("gk2");
+    expect((db.prepare("SELECT COUNT(*) AS n FROM tenants").get() as { n: number }).n).toBe(1);
+  });
+  it("drops the stored toolId when the reconnect moves the tenant to another subaccount", () => {
+    const { tenants } = mk();
+    const t = tenants.createOrUpdateByLocation({ ...input, subAccountId: "sub_a" }).tenant;
+    tenants.setToolId(t.id, "tool_1");
+
+    // Same subaccount → the tool is still reachable, keep it.
+    expect(tenants.createOrUpdateByLocation({ ...input, subAccountId: "sub_a" }).tenant.toolId)
+      .toBe("tool_1");
+    // Moved → the old tool lives in a subaccount this key can no longer reach.
+    expect(tenants.createOrUpdateByLocation({ ...input, subAccountId: "sub_b" }).tenant.toolId)
+      .toBeNull();
+  });
 });
 
 describe("processed store", () => {

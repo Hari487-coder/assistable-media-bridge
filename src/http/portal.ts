@@ -278,8 +278,9 @@ export function createPortalRouter(ctx: PortalCtx): Router {
         ...(b.subAccountId?.trim() ? { subAccountId: b.subAccountId.trim() } : {}),
       });
       const mcpUrl = `${ctx.publicBaseUrl}/mcp/${r.tenant.token}`;
-      res.send(shell("Connected", `
-        <h1>Connected</h1>
+      const title = r.reconnected ? "Reconnected" : "Connected";
+      res.send(shell(title, `
+        <h1>${title}</h1>
         <p class="lede">${esc(r.tenant.label)} is wired up. Point the assistant at the tool below
           and it will read attachments on demand.</p>
         ${wireTrace(2)}
@@ -288,6 +289,13 @@ export function createPortalRouter(ctx: PortalCtx): Router {
             <span class="mark">&#10003;</span>
             <span>Credentials validated live against GHL and Assistable v3.</span>
           </div>
+          ${r.reconnected ? `
+            <div class="callout ok">
+              <span class="mark">&#8635;</span>
+              <span>This GHL location was already connected, so its settings were updated in place
+                rather than added twice. The tool URL, dashboard link and activity history below are
+                unchanged, and already-read attachments stay read.</span>
+            </div>` : ""}
           ${r.warnings.map((w) => `
             <div class="callout warn">
               <span class="mark">!</span>

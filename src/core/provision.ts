@@ -133,8 +133,13 @@ export async function provisionTenant(deps: ProvisionDeps, input: TenantInput) {
     );
   }
 
-  // 2. Persist the tenant (secrets encrypted at rest).
-  const tenant: Tenant = deps.tenants.create(input);
+  // 2. Persist the tenant (secrets encrypted at rest). Keyed on the GHL
+  //    location: re-onboarding a location that is already connected UPDATES it
+  //    rather than adding a second row. Two rows for one location means two
+  //    waker cursors — the contact gets two AI replies and every attachment is
+  //    billed twice. Validation above has already passed, so a reconnect can
+  //    never overwrite a working tenant with credentials that don't work.
+  const { tenant, reconnected } = deps.tenants.createOrUpdateByLocation(input);
 
   // 3. Create-or-recover the tool and ASSIGN it to the assistant. Assignment
   //    is what makes the assistant able to call it; a created-but-unassigned
@@ -142,7 +147,7 @@ export async function provisionTenant(deps: ProvisionDeps, input: TenantInput) {
   //    success.
   const { toolId, warnings } = await ensureTool(v3, deps.tenants, deps.publicBaseUrl, tenant);
 
-  return { tenant, toolId, warnings };
+  return { tenant, toolId, warnings, reconnected };
 }
 
 export const PROMPT_SNIPPET =
