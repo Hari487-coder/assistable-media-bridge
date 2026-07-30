@@ -143,6 +143,25 @@ describe("runWakerCycle", () => {
     expect(deps.events.latest("t1", 10).some((e) => e.kind === "error")).toBe(true);
   });
 
+  it("a failing poll records an error event before rethrowing (no silent dead poller)", async () => {
+    const db = openDb(":memory:");
+    const deps = {
+      v3: {
+        listConversations: async () => { throw new Error("v3 listConversations HTTP 401"); },
+        listMessages: async () => [],
+        chatCompletion: async () => ({ ok: true as const }),
+        assignTool: async () => ({ ok: true as const }),
+      },
+      processed: createProcessedStore(db),
+      events: createEventStore(db),
+      state: new Map<string, string>(),
+    };
+    await expect(runWakerCycle(deps as never, tenant)).rejects.toThrow(/401/);
+    expect(deps.events.latest("t1", 5).some(
+      (e) => e.kind === "error" && e.detail.includes("poll failed")
+    )).toBe(true);
+  });
+
   it("startWaker only cycles enabled tenants with wakerEnabled, and never overlaps", async () => {
     const seen: string[] = [];
     const tenants = [

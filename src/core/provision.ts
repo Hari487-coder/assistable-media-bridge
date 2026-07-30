@@ -18,10 +18,79 @@ export interface ProvisionDeps {
     subAccountId?: string
   ) => Pick<
     V3Client,
-    "validateKey" | "listAssistants" | "createTool" | "findToolByName" | "assignTool"
+    "validateKey" | "listAssistants" | "createTool" | "findToolByName" | "assignTool" | "updateToolUrl"
   >;
   ghlFactory: (pit: string) => Pick<GhlClient, "validatePit">;
   providerFactory: (name: TenantInput["provider"], key: string) => MediaProvider;
+}
+
+/**
+ * Create-or-recover the analyze_attachment tool for a tenant, repoint it at
+ * this instance, assign it to the tenant's assistant, and persist the toolId.
+ * Callable at onboarding AND later from the dashboard's "Retry tool setup" —
+ * a create failure must never be a dead end.
+ *
+ * Recovery matters because v3 createTool can fail while the tool nonetheless
+ * exists or once existed: the route 409s only on LIVE duplicates, but the DB
+ * unique constraint on (subaccount, name) also covers soft-deleted rows, so a
+ * previously-deleted analyze_attachment makes create 500 forever. A tool found
+ * by lookup may also belong to an older bridge instance — its URL is repointed
+ * here before reuse.
+ */
+export async function ensureTool(
+  v3: Pick<V3Client, "createTool" | "findToolByName" | "assignTool" | "updateToolUrl">,
+  tenants: Pick<TenantStore, "setToolId">,
+  publicBaseUrl: string,
+  tenant: Pick<Tenant, "id" | "token" | "assistantId">
+): Promise<{ toolId: string | null; warnings: string[] }> {
+  const warnings: string[] = [];
+  const toolUrl = `${publicBaseUrl}/tool/${tenant.token}`;
+  let toolId: string | null = null;
+  let reused = false;
+  let createErr: string | null = null;
+  try {
+    const created = await v3.createTool({
+      name: TOOL_NAME,
+      description: TOOL_DESCRIPTION,
+      url: toolUrl,
+    });
+    toolId = created.id;
+    if (!toolId && created.conflict) {
+      toolId = await v3.findToolByName(TOOL_NAME);
+      reused = toolId !== null;
+    }
+  } catch (err) {
+    createErr = err instanceof Error ? err.message : "error";
+    try {
+      toolId = await v3.findToolByName(TOOL_NAME);
+      reused = toolId !== null;
+    } catch { /* lookup also failed — fall through to the warning */ }
+  }
+
+  if (!toolId) {
+    warnings.push(
+      `could not auto-create the ${TOOL_NAME} tool${createErr ? ` (${createErr})` : ""} — create it manually with URL ${toolUrl} and assign it to assistant ${tenant.assistantId}`
+    );
+    return { toolId: null, warnings };
+  }
+
+  if (reused) {
+    const up = await v3.updateToolUrl(toolId, toolUrl);
+    if (!up.ok) {
+      warnings.push(
+        `an existing ${TOOL_NAME} tool was found but could not be repointed at this instance (${up.error}) — its URL may target an older deployment; set it to ${toolUrl} manually`
+      );
+    }
+  }
+
+  tenants.setToolId(tenant.id, toolId);
+  const assigned = await v3.assignTool(toolId, tenant.assistantId);
+  if (!assigned.ok) {
+    warnings.push(
+      `the ${TOOL_NAME} tool exists but could NOT be attached to your assistant (${assigned.error}). Attach it manually to assistant ${tenant.assistantId}, or the assistant will not be able to read attachments`
+    );
+  }
+  return { toolId, warnings };
 }
 
 export async function provisionTenant(deps: ProvisionDeps, input: TenantInput) {
@@ -46,43 +115,12 @@ export async function provisionTenant(deps: ProvisionDeps, input: TenantInput) {
 
   // 2. Persist the tenant (secrets encrypted at rest).
   const tenant: Tenant = deps.tenants.create(input);
-  const warnings: string[] = [];
-  const toolUrl = `${deps.publicBaseUrl}/tool/${tenant.token}`;
 
-  // 3. Create the tool (idempotent — reuse an existing one on 409), then ASSIGN
-  //    it to the assistant. Assignment is what makes the assistant able to call
-  //    it; a created-but-unassigned tool does nothing, so an assign failure is a
-  //    loud warning, not a quiet success.
-  let toolId: string | null = null;
-  try {
-    const created = await v3.createTool({
-      name: TOOL_NAME,
-      description: TOOL_DESCRIPTION,
-      url: toolUrl,
-    });
-    toolId = created.id;
-    if (!toolId && created.conflict) {
-      toolId = await v3.findToolByName(TOOL_NAME);
-    }
-
-    if (!toolId) {
-      warnings.push(
-        `could not resolve the ${TOOL_NAME} tool id — create it manually with URL ${toolUrl} and assign it to assistant ${input.assistantId}`
-      );
-    } else {
-      deps.tenants.setToolId(tenant.id, toolId);
-      const assigned = await v3.assignTool(toolId, input.assistantId);
-      if (!assigned.ok) {
-        warnings.push(
-          `the ${TOOL_NAME} tool exists but could NOT be attached to your assistant (${assigned.error}). Attach it manually to assistant ${input.assistantId}, or the assistant will not be able to read attachments`
-        );
-      }
-    }
-  } catch (err) {
-    warnings.push(
-      `could not auto-create the ${TOOL_NAME} tool (${err instanceof Error ? err.message : "error"}) — create it manually with URL ${toolUrl} and assign it to assistant ${input.assistantId}`
-    );
-  }
+  // 3. Create-or-recover the tool and ASSIGN it to the assistant. Assignment
+  //    is what makes the assistant able to call it; a created-but-unassigned
+  //    tool does nothing, so an assign failure is a loud warning, not a quiet
+  //    success.
+  const { toolId, warnings } = await ensureTool(v3, deps.tenants, deps.publicBaseUrl, tenant);
 
   return { tenant, toolId, warnings };
 }

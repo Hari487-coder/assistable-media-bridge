@@ -20,6 +20,7 @@ function makeApp() {
       createTool: async () => ({ id: "tool_1", conflict: false, raw: {} }),
       findToolByName: async () => "tool_1",
       assignTool: async () => ({ ok: true }),
+      updateToolUrl: async () => ({ ok: true }),
     }) as never,
     ghlFactory: () => ({ validatePit: async () => true }) as never,
     providerFactory: () => ({ validateKey: async () => ({ ok: true as const }), describe: async () => "" }),
@@ -54,6 +55,30 @@ describe("portal", () => {
     const res = await request(app).get(`/dashboard/${t.token}`);
     expect(res.status).toBe(200);
     expect(res.text).toContain("wake");
+  });
+  it("dashboard offers Retry tool setup only while toolId is missing, and the retry heals it", async () => {
+    const { app, tenants, events } = makeApp();
+    const t = tenants.create({
+      label: "V", locationId: "L1", assistantId: "A1",
+      provider: "gemini", v3Key: "v", ghlPit: "p", aiKey: "k",
+    });
+    // toolId is null → the dashboard must offer the retry.
+    const before = await request(app).get(`/dashboard/${t.token}`);
+    expect(before.text).toContain("Retry tool setup");
+
+    const retry = await request(app).post(`/dashboard/${t.token}/retry-tool`);
+    expect(retry.status).toBe(302);
+    expect(tenants.getByToken(t.token)?.toolId).toBe("tool_1");
+    expect(events.latest(t.id, 5).some((e) => e.kind === "assign" && e.detail.includes("tool_1"))).toBe(true);
+
+    const after = await request(app).get(`/dashboard/${t.token}`);
+    expect(after.text).not.toContain("Retry tool setup");
+    expect(after.text).toContain("tool_1");
+  });
+  it("retry-tool on an unknown token 404s", async () => {
+    const { app } = makeApp();
+    const res = await request(app).post("/dashboard/nope/retry-tool");
+    expect(res.status).toBe(404);
   });
   it("escapes a malicious tenant label in the dashboard title (no XSS)", async () => {
     const { app, tenants } = makeApp();

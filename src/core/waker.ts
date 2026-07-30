@@ -58,7 +58,19 @@ async function ensureToolAssigned(
 }
 
 export async function runWakerCycle(deps: WakerDeps, tenant: Tenant): Promise<{ woken: number }> {
-  const conversations = await deps.v3.listConversations(WAKER_CONV_LIMIT);
+  let conversations: Awaited<ReturnType<WakerDeps["v3"]["listConversations"]>>;
+  try {
+    conversations = await deps.v3.listConversations(WAKER_CONV_LIMIT);
+  } catch (err) {
+    // Without this, a dead poller (bad key, revoked subaccount, API outage)
+    // shows as an eternally-empty activity feed — startWaker swallows the
+    // rethrow, so this event is the only trace the tenant ever sees.
+    deps.events.record(
+      tenant.id, "error",
+      `poll failed: ${err instanceof Error ? err.message : "unknown"}`
+    );
+    throw err;
+  }
   deps.events.record(tenant.id, "poll", `conversations=${conversations.length}`);
   if (conversations.length === 0) return { woken: 0 };
 

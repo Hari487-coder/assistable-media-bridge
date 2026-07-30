@@ -1,5 +1,5 @@
 import { Router } from "express";
-import { PROMPT_SNIPPET, type ProvisionDeps, provisionTenant } from "../core/provision";
+import { PROMPT_SNIPPET, type ProvisionDeps, ensureTool, provisionTenant } from "../core/provision";
 import type { EventStore } from "../store/events";
 
 export interface PortalCtx extends ProvisionDeps { events: EventStore }
@@ -373,8 +373,35 @@ export function createPortalRouter(ctx: PortalCtx): Router {
           <small>Tool: ${t.toolId ? `analyze_attachment (${esc(t.toolId)})` : "not yet created"}</small>
           <small><code>${esc(ctx.publicBaseUrl)}/mcp/${t.token}</code></small>
         </footer>
+        ${t.toolId ? "" : `
+        <form method="post" action="/dashboard/${t.token}/retry-tool">
+          <div class="btn-row">
+            <button class="btn btn-primary">Retry tool setup</button>
+          </div>
+        </form>`}
       </div>
     `));
+  });
+
+  // Re-run tool create/recover/assign for an already-connected tenant. The
+  // onboarding path can leave toolId null (e.g. platform-side create failure);
+  // this makes that state recoverable in one click instead of forcing a
+  // re-onboard (which would duplicate the tenant and double-wake conversations).
+  router.post("/dashboard/:token/retry-tool", async (req, res) => {
+    const t = ctx.tenants.getByToken(req.params.token);
+    if (!t) { res.status(404).end(); return; }
+    try {
+      const v3 = ctx.v3Factory(t.v3Key, t.subAccountId);
+      const r = await ensureTool(v3, ctx.tenants, ctx.publicBaseUrl, t);
+      if (r.toolId) {
+        ctx.events.record(t.id, "assign", `tool ready (${r.toolId})${r.warnings.length ? ` — ${r.warnings.join("; ")}` : ""}`);
+      } else {
+        ctx.events.record(t.id, "error", `tool retry failed: ${r.warnings.join("; ")}`);
+      }
+    } catch (err) {
+      ctx.events.record(t.id, "error", `tool retry failed: ${err instanceof Error ? err.message : "unknown"}`);
+    }
+    res.redirect(`/dashboard/${t.token}`);
   });
 
   router.post("/dashboard/:token/toggle", (req, res) => {

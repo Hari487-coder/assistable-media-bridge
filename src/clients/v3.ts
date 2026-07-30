@@ -111,6 +111,14 @@ export function createV3Client(opts: V3ClientOptions) {
       const rows = items(unwrap(r.json)) as Array<{ id: string; name: string }>;
       return rows.find((t) => t.name === name)?.id ?? null;
     },
+    /** Repoint an existing tool's webhook URL (e.g. a tool created by an older
+     *  bridge instance must be re-aimed at THIS instance before reuse). */
+    async updateToolUrl(toolId: string, url: string) {
+      const r = await call("PATCH", `v3/tools/${toolId}`, { url });
+      return r.ok
+        ? { ok: true as const }
+        : { ok: false as const, error: `v3 updateTool ${errDetail(r.status, r.json)}` };
+    },
     /** Attach a tool to an assistant so the assistant can actually call it. */
     async assignTool(toolId: string, assistantId: string) {
       const r = await call("POST", `v3/tools/${toolId}/assign`, { assistant_id: assistantId });

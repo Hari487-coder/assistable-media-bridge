@@ -17,6 +17,7 @@ export function createMockState() {
       createTool: async () => ({ id: "mock-tool-1", conflict: false as const, raw: {} }),
       findToolByName: async () => "mock-tool-1",
       assignTool: async () => ({ ok: true as const }),
+      updateToolUrl: async () => ({ ok: true as const }),
       listConversations: async () => [
         { id: "mock-conv-1", contactId: "mock-contact-1", updatedAt: convUpdatedAt,
           assistant: { id: "mock-asst-1" } },
