@@ -1,4 +1,14 @@
-const ALLOWED_SUFFIXES = ["leadconnectorhq.com", "msgsndr.com", "assistable.ai"];
+// storage.googleapis.com: GHL rehosts inbound SMS/MMS media on GCS (observed
+// live 2026-07-30 — every MMS attachment URL pointed there). Allowing it does
+// not weaken the SSRF posture: the allowlist exists to stop fetches into
+// private/internal endpoints, and GCS is public object storage. Attachment
+// URLs come from GHL's own message records, not from contact-controlled text.
+const ALLOWED_SUFFIXES = [
+  "leadconnectorhq.com",
+  "msgsndr.com",
+  "assistable.ai",
+  "storage.googleapis.com",
+];
 const DEFAULT_MAX_BYTES = 25 * 1024 * 1024;
 
 export type DownloadResult =

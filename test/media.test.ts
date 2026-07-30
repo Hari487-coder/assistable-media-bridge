@@ -34,6 +34,15 @@ describe("downloadMedia", () => {
     expect(r).toEqual({ error: "disallowed_host" });
     expect(fetched).toBe(false);
   });
+  it("allows GCS — GHL rehosts SMS/MMS media on storage.googleapis.com", async () => {
+    const r = await downloadMedia("https://storage.googleapis.com/some-ghl-bucket/img.jpg", {
+      fetchImpl: ok(new Uint8Array(5)),
+    });
+    expect("bytes" in r && r.bytes.length).toBe(5);
+    // googleapis.com in general stays blocked — only the storage host is trusted.
+    const other = await downloadMedia("https://compute.googleapis.com/x", { fetchImpl: ok(new Uint8Array(1)) });
+    expect(other).toEqual({ error: "disallowed_host" });
+  });
   it("downloads from GHL CDN and enforces cap", async () => {
     const r = await downloadMedia("https://storage.msgsndr.com/x.ogg", { fetchImpl: ok(new Uint8Array(10)) });
     expect("bytes" in r && r.bytes.length).toBe(10);
