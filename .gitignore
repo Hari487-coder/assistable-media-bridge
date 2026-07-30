@@ -2,3 +2,7 @@ node_modules/
 dist/
 .env
 *.sqlite
+
+media-mcp.sqlite
+media-mcp.sqlite-shm
+media-mcp.sqlite-wal
