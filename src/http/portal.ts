@@ -1,4 +1,5 @@
 import { Router } from "express";
+import { parseBatchRows, provisionBatch } from "../core/batch";
 import { PROMPT_SNIPPET, type ProvisionDeps, ensureTool, provisionTenant } from "../core/provision";
 import type { EventStore } from "../store/events";
 
@@ -95,16 +96,25 @@ const STYLE = `
     display: block; font-size: 13px; color: var(--ink-dim); margin-bottom: 6px;
   }
   label .hint { color: var(--ink-faint); font-weight: 400; }
-  input, select {
+  input, select, textarea {
     width: 100%; padding: 10px 12px; background: var(--bg);
     border: 1px solid var(--line); border-radius: 7px; color: var(--ink);
     font-size: 14px; font-family: var(--sans); outline: none;
     transition: border-color 0.15s ease;
   }
-  input:focus, select:focus, button:focus-visible, a:focus-visible {
+  input:focus, select:focus, textarea:focus, button:focus-visible, a:focus-visible {
     border-color: var(--accent); outline: 2px solid var(--accent-dim); outline-offset: 1px;
   }
-  input::placeholder { color: var(--ink-faint); }
+  input::placeholder, textarea::placeholder { color: var(--ink-faint); }
+  textarea {
+    font-family: var(--mono); font-size: 13px; line-height: 1.7;
+    min-height: 190px; resize: vertical; white-space: pre;
+  }
+  .altlink {
+    margin: 14px 0 0; font-size: 13px; color: var(--ink-faint); text-align: center;
+  }
+  .pill.warnpill { background: var(--warn-bg); color: var(--warn); }
+  td.why { color: var(--ink-dim); font-size: 12.5px; }
   .grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
   @media (max-width: 560px) { .grid2 { grid-template-columns: 1fr; } }
   button, .btn {
@@ -264,6 +274,8 @@ export function createPortalRouter(ctx: PortalCtx): Router {
           </fieldset>
           <button type="submit" class="btn btn-primary">Validate &amp; connect</button>
         </form>
+        <p class="altlink">Running an agency?
+          <a class="link" href="/setup/batch">Connect several subaccounts at once &rarr;</a></p>
       </div>
     `));
   });
@@ -331,6 +343,148 @@ export function createPortalRouter(ctx: PortalCtx): Router {
         </div>
       `));
     }
+  });
+
+  // ---- bulk setup ------------------------------------------------------
+  // An agency runs ONE Assistable workspace across many subaccounts, so the
+  // three credentials are identical on every row and only the identifiers
+  // differ. Pasting them 40 times is the whole friction.
+
+  const batchCredentialFields = `
+    <fieldset>
+      <legend>Shared credentials</legend>
+      <p class="lede" style="margin-bottom:14px">Used for every subaccount below. The v3 key must be
+        workspace-wide, so it can reach each subaccount you list.</p>
+      <div class="field">
+        <label for="v3Key">Assistable v3 API key <span class="hint">— starts with <code>ask_live_</code></span></label>
+        <input id="v3Key" name="v3Key" type="password" autocomplete="off"
+          pattern="ask_(live|stag)_.+" title="A v3 API key starts with ask_live_." required>
+      </div>
+      <div class="field">
+        <label for="ghlPit">GHL Private Integration Token</label>
+        <input id="ghlPit" name="ghlPit" type="password" autocomplete="off" required>
+      </div>
+      <div class="grid2">
+        <div class="field">
+          <label for="provider">AI provider</label>
+          <select id="provider" name="provider">
+            <option value="gemini">Gemini (recommended)</option>
+            <option value="openai">OpenAI</option>
+          </select>
+        </div>
+        <div class="field">
+          <label for="aiKey">Provider API key</label>
+          <input id="aiKey" name="aiKey" type="password" autocomplete="off" required>
+        </div>
+      </div>
+    </fieldset>`;
+
+  const batchForm = (rowsText: string, error?: string) => `
+    <h1>Connect several subaccounts</h1>
+    <p class="lede">Paste your credentials once, then list the subaccounts. Every row is validated
+      against the live APIs on its own — one bad line fails that row, not the batch.</p>
+    ${wireTrace(0)}
+    <div class="panel">
+      ${error ? `<div class="callout error"><span class="mark">&#10007;</span><span>${esc(error)}</span></div>` : ""}
+      <form method="post" action="/setup/batch">
+        ${batchCredentialFields}
+        <fieldset>
+          <legend>Subaccounts</legend>
+          <div class="field">
+            <label for="rows">One per line <span class="hint">— <code>subAccountId, locationId, assistantId, label</code>.
+              Commas or tabs, so a spreadsheet paste works. Leave the assistant blank and it is filled
+              in automatically when the subaccount has exactly one.</span></label>
+            <textarea id="rows" name="rows" spellcheck="false" required
+              placeholder="sub_a1b2, loc_9f8e, asst_1234, Main Street Dental&#10;sub_c3d4, loc_7a6b, , Riverside Chiropractic&#10;sub_e5f6, loc_5c4d">${esc(rowsText)}</textarea>
+          </div>
+        </fieldset>
+        <button type="submit" class="btn btn-primary">Validate &amp; connect all</button>
+      </form>
+      <p class="altlink">Just one subaccount? <a class="link" href="/">Use the single form &rarr;</a></p>
+    </div>`;
+
+  router.get("/setup/batch", (_req, res) => {
+    res.send(shell("Media MCP — Bulk connect", batchForm("")));
+  });
+
+  router.post("/setup/batch", async (req, res) => {
+    const b = req.body as Record<string, string>;
+    const rowsText = b.rows ?? "";
+    const { rows, errors } = parseBatchRows(rowsText);
+    if (rows.length === 0) {
+      const why = errors.length
+        ? errors.map((e) => (e.line ? `line ${e.line}: ${e.error}` : e.error)).join(" · ")
+        : "no subaccounts were listed";
+      res.status(400).send(shell("Nothing to connect", batchForm(rowsText, why)));
+      return;
+    }
+
+    const results = await provisionBatch(
+      ctx,
+      {
+        provider: b.provider === "openai" ? "openai" : "gemini",
+        v3Key: b.v3Key, ghlPit: b.ghlPit, aiKey: b.aiKey,
+      },
+      rows
+    );
+
+    const connected = results.filter((r) => r.ok && !r.reconnected).length;
+    const reconnected = results.filter((r) => r.ok && r.reconnected).length;
+    const failed = results.filter((r) => !r.ok);
+
+    const statusCell = (r: (typeof results)[number]) => {
+      if (!r.ok) return `<span class="pill off">failed</span>`;
+      if (r.warnings.length) return `<span class="pill warnpill">needs attention</span>`;
+      return `<span class="pill on">${r.reconnected ? "reconnected" : "connected"}</span>`;
+    };
+    const detailCell = (r: (typeof results)[number]) => {
+      if (!r.ok) return esc(r.error ?? "provisioning failed");
+      const bits = [
+        r.toolId ? `tool ${esc(r.toolId)}` : "tool not created",
+        `<a class="link" href="/dashboard/${r.token}">dashboard</a>`,
+      ];
+      if (r.warnings.length) bits.push(esc(r.warnings.join("; ")));
+      return bits.join(" &middot; ");
+    };
+    const resultRows = results.map((r) => `
+      <tr>
+        <td class="kind">${esc(r.row.locationId)}</td>
+        <td class="detail">${esc(r.row.subAccountId)}</td>
+        <td class="detail">${esc(r.assistantId ?? "—")}</td>
+        <td>${statusCell(r)}</td>
+        <td class="why">${detailCell(r)}</td>
+      </tr>`).join("");
+
+    res.send(shell("Bulk connect results", `
+      <h1>${connected + reconnected} of ${results.length} connected</h1>
+      <p class="lede">Every row was validated live. Re-submitting the same list is safe — rows that
+        already worked reconnect in place rather than duplicating, so fix the failures below and
+        paste the whole list again.</p>
+      ${wireTrace(failed.length === results.length ? 0 : 2)}
+      <div class="panel">
+        <div class="stat-row">
+          <span class="stat">New <span class="pill on">${connected}</span></span>
+          <span class="stat">Reconnected <span class="pill on">${reconnected}</span></span>
+          <span class="stat">Failed <span class="pill ${failed.length ? "off" : "on"}">${failed.length}</span></span>
+        </div>
+        ${errors.length ? `
+          <div class="callout warn">
+            <span class="mark">!</span>
+            <span>${errors.length} line(s) were skipped as unparseable:
+              ${esc(errors.map((e) => `line ${e.line}`).join(", "))}</span>
+          </div>` : ""}
+        <div class="section-title">Results</div>
+        <table>
+          <tr><th>Location</th><th>Subaccount</th><th>Assistant</th><th>Status</th><th>Detail</th></tr>
+          ${resultRows}
+        </table>
+        <div class="section-title">Add to every connected assistant's prompt</div>
+        <pre>${esc(PROMPT_SNIPPET)}</pre>
+        <div class="btn-row">
+          <a class="btn btn-ghost" href="/setup/batch">Connect more</a>
+        </div>
+      </div>
+    `));
   });
 
   router.get("/dashboard/:token", (req, res) => {

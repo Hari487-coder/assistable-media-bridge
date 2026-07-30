@@ -88,6 +88,39 @@ GHL PIT must have these scopes:
 - `conversations.readonly`
 - `conversations/message.readonly`
 
+## Onboarding an Agency (many subaccounts)
+
+One instance serves any number of subaccounts. `/setup/batch` takes the three
+credentials **once** and a list of subaccounts, one per line:
+
+```
+subAccountId, locationId, assistantId, label
+```
+
+Commas or tabs, so a spreadsheet column paste works unchanged. Only the first
+two fields are required — leave the assistant blank and it is filled in
+automatically when that subaccount has exactly one; if it has several the row
+fails listing the choices rather than guessing and wiring media into the wrong
+bot. The label defaults to the location id.
+
+The v3 API key must be **workspace-wide**, since every row is provisioned
+against its own `X-Subaccount-Id`. A key scoped to a single subaccount cannot
+reach the others.
+
+Each row runs through the same validation, tool creation and reconnect path as
+the single form, four at a time, and a failing row never aborts the batch. So
+the workflow is: paste the list, fix whatever failed, paste the **whole list**
+again. Rows that already succeeded reconnect in place — same token, same live
+tool URL, same activity history — instead of duplicating.
+
+Onboarding is keyed on the GHL location: one tenant per location, enforced by a
+unique index. That matters because two rows for one location means two waker
+cursors, so the contact gets two AI replies and every attachment is billed to
+the AI provider twice.
+
+Each connected subaccount still gets its own dashboard, kill switches and
+`analyze_attachment` tool; the prompt snippet must be added to every assistant.
+
 ## Spike Runbook (Testing Integration)
 
 The `npm run spike` CLI tests the full detect→fetch→wake→tool-listen flow.

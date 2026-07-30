@@ -60,6 +60,33 @@ describe("portal", () => {
     expect(tenants.list()).toHaveLength(1);
     expect(tenants.getByLocationId("L1")?.label).toBe("Vol 2");
   });
+  it("GET /setup/batch renders the bulk form", async () => {
+    const { app } = makeApp();
+    const res = await request(app).get("/setup/batch");
+    expect(res.status).toBe(200);
+    expect(res.text).toContain("Shared credentials");
+    expect(res.text).toContain("subAccountId, locationId");
+  });
+  it("POST /setup/batch connects every listed subaccount and reports per row", async () => {
+    const { app, tenants } = makeApp();
+    const res = await request(app).post("/setup/batch").type("form").send({
+      provider: "gemini", v3Key: "v", ghlPit: "p", aiKey: "k",
+      rows: "sub_1, L1, A1, Clinic One\nsub_2, L2, A1, Clinic Two",
+    });
+    expect(res.status).toBe(200);
+    expect(res.text).toContain("2 of 2 connected");
+    expect(tenants.list()).toHaveLength(2);
+    expect(tenants.getByLocationId("L2")?.subAccountId).toBe("sub_2");
+  });
+  it("POST /setup/batch with nothing parseable re-renders the form with the reason", async () => {
+    const { app, tenants } = makeApp();
+    const res = await request(app).post("/setup/batch").type("form").send({
+      provider: "gemini", v3Key: "v", ghlPit: "p", aiKey: "k", rows: "garbage",
+    });
+    expect(res.status).toBe(400);
+    expect(res.text).toContain("line 1");
+    expect(tenants.list()).toHaveLength(0);
+  });
   it("dashboard shows health events", async () => {
     const { app, tenants, events } = makeApp();
     const t = tenants.create({
