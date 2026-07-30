@@ -109,6 +109,19 @@ describe("analyzeForContact", () => {
     expect(described).toEqual(["audio:audio/ogg", "image:image/png"]);
     expect(r.processedIds).toEqual(["gVoice", "gImg"]);
   });
+  it("a disallowed attachment host records the blocked hostname, never the full URL", async () => {
+    const d = deps({ ghl: {
+      latestMediaMessages: async () => [
+        { id: "gX", attachments: ["https://mms.example-cdn.com/media/abc?sig=SECRET"], direction: "inbound", dateAdded: "t1" },
+      ],
+      validatePit: async () => true,
+    } });
+    const r = await analyzeForContact(d as never, tenant, "C1");
+    expect(r.text).toContain("disallowed_host");
+    const ev = d.events.latest("t1", 5).find((e) => e.detail.includes("blocked attachment host"));
+    expect(ev?.detail).toBe("blocked attachment host: mms.example-cdn.com");
+    expect(ev?.detail).not.toContain("SECRET");
+  });
   it("message with zero attachments yields no-new-attachments and marks nothing", async () => {
     const d = deps({ ghl: {
       latestMediaMessages: async () => [

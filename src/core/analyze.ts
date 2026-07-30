@@ -53,6 +53,14 @@ export async function analyzeForContact(
       try {
         const dl = await downloadMedia(url, { fetchImpl: deps.fetchImpl });
         if ("error" in dl) {
+          if (dl.error === "disallowed_host") {
+            // Record the blocked HOST (never the full URL — attachment URLs
+            // can carry signed tokens) so the allowlist gap is readable off
+            // the dashboard instead of needing a DB dig for the message row.
+            let host = "unparseable-url";
+            try { host = new URL(url).hostname; } catch { /* keep placeholder */ }
+            deps.events.record(tenant.id, "tool_skip", `blocked attachment host: ${host}`);
+          }
           sections.push(`[attachment could not be read: ${dl.error}]`);
           continue;
         }
