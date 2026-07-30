@@ -29,13 +29,51 @@ export interface BatchRow {
   /** Optional — resolved automatically when the subaccount has exactly one. */
   assistantId?: string;
   label?: string;
+  /** Optional per-location GHL token, overriding the shared one. */
+  ghlPit?: string;
 }
 
 export interface BatchShared {
   provider: TenantInput["provider"];
   v3Key: string;
-  ghlPit: string;
   aiKey: string;
+  /** Optional: the default token for rows that do not carry their own. Every
+   *  row needs a token from ONE of the two, checked per row. */
+  ghlPit?: string;
+}
+
+/** `pit=<token>` anywhere in a row, in any position. */
+const PIT_FIELD = /^pit\s*=\s*(.+)$/i;
+
+/**
+ * Strip `pit=` out of a row's fields before positional parsing.
+ *
+ * A GHL Private Integration Token may be agency-wide or per-location depending
+ * on how it was minted, and the bridge cannot tell which from the token alone.
+ * So rather than guess: paste one shared token for the common case, and let any
+ * row that needs its own carry `pit=...`. Keyed rather than a fifth positional
+ * column because the label deliberately absorbs trailing commas ("Main Street
+ * Dental, PC") — a positional token would be ambiguous with that.
+ */
+function extractPit(parts: string[]): { rest: string[]; ghlPit?: string } {
+  const rest: string[] = [];
+  let ghlPit: string | undefined;
+  for (const p of parts) {
+    const m = PIT_FIELD.exec(p);
+    if (m) { ghlPit = m[1].trim(); continue; }
+    rest.push(p);
+  }
+  return ghlPit ? { rest, ghlPit } : { rest };
+}
+
+/**
+ * Blank out `pit=` values so a pasted list can be echoed back into the form on a
+ * validation error without writing live tokens into an HTML response that a
+ * proxy or log might retain. The row keeps its shape so the operator can see
+ * which lines carried a token.
+ */
+export function redactPits(text: string): string {
+  return text.replace(/\bpit\s*=\s*[^\t,\r\n]+/gi, "pit=");
 }
 
 export interface BatchOutcome {
@@ -55,8 +93,10 @@ export interface BatchOutcome {
  *
  *   subAccountId, locationId[, assistantId[, label]]
  *
- * Blank lines and `#` comments are skipped. Parse errors are returned per line
- * rather than thrown — one malformed line must not discard the other 40.
+ * Plus an optional `pit=<token>` field in any position, overriding the shared
+ * GHL token for that one location. Blank lines and `#` comments are skipped.
+ * Parse errors are returned per line rather than thrown — one malformed line
+ * must not discard the other 40.
  */
 export function parseBatchRows(
   text: string
@@ -67,11 +107,11 @@ export function parseBatchRows(
   for (let i = 0; i < lines.length; i += 1) {
     const raw = lines[i].trim();
     if (!raw || raw.startsWith("#")) continue;
-    const parts = raw.split(/[\t,]/).map((p) => p.trim());
-    const [subAccountId, locationId, assistantId, ...rest] = parts;
+    const { rest: fields, ghlPit } = extractPit(raw.split(/[\t,]/).map((p) => p.trim()));
+    const [subAccountId, locationId, assistantId, ...rest] = fields;
     if (!subAccountId || !locationId) {
       errors.push({
-        line: i + 1, text: raw,
+        line: i + 1, text: redactPits(raw),
         error: "expected at least: subAccountId, locationId",
       });
       continue;
@@ -82,6 +122,7 @@ export function parseBatchRows(
       subAccountId, locationId,
       ...(assistantId ? { assistantId } : {}),
       ...(rest.length ? { label: rest.join(", ") } : {}),
+      ...(ghlPit ? { ghlPit } : {}),
     });
   }
   if (rows.length > MAX_BATCH_ROWS) {
@@ -120,6 +161,14 @@ export async function provisionBatch(
 ): Promise<BatchOutcome[]> {
   return mapLimit(rows, BATCH_CONCURRENCY, async (row): Promise<BatchOutcome> => {
     try {
+      // Per-row token wins; otherwise the shared one. Checked per row so a list
+      // where only SOME locations need their own token still works.
+      const ghlPit = row.ghlPit?.trim() || shared.ghlPit?.trim();
+      if (!ghlPit) {
+        throw new Error(
+          "no GHL Private Integration Token for this location — paste a shared token above, or add pit=<token> to this row"
+        );
+      }
       const assistantId = await resolveAssistantId(deps, shared, row);
       const r = await provisionTenant(deps, {
         label: row.label?.trim() || row.locationId,
@@ -128,7 +177,7 @@ export async function provisionBatch(
         subAccountId: row.subAccountId,
         provider: shared.provider,
         v3Key: shared.v3Key,
-        ghlPit: shared.ghlPit,
+        ghlPit,
         aiKey: shared.aiKey,
       });
       return {

@@ -1,5 +1,5 @@
 import { Router } from "express";
-import { parseBatchRows, provisionBatch } from "../core/batch";
+import { parseBatchRows, provisionBatch, redactPits } from "../core/batch";
 import { PROMPT_SNIPPET, type ProvisionDeps, ensureTool, provisionTenant } from "../core/provision";
 import type { EventStore } from "../store/events";
 import { MAX_ANALYSIS_INSTRUCTION } from "../store/tenants";
@@ -362,8 +362,11 @@ export function createPortalRouter(ctx: PortalCtx): Router {
           pattern="ask_(live|stag)_.+" title="A v3 API key starts with ask_live_." required>
       </div>
       <div class="field">
-        <label for="ghlPit">GHL Private Integration Token</label>
-        <input id="ghlPit" name="ghlPit" type="password" autocomplete="off" required>
+        <label for="ghlPit">GHL Private Integration Token <span class="hint">— optional if every row
+          carries its own <code>pit=</code>. A private integration may be agency-wide or scoped to one
+          location depending on how it was minted; if yours only covers one location, leave this blank
+          and put <code>pit=&lt;token&gt;</code> on each row instead.</span></label>
+        <input id="ghlPit" name="ghlPit" type="password" autocomplete="off">
       </div>
       <div class="grid2">
         <div class="field">
@@ -394,9 +397,10 @@ export function createPortalRouter(ctx: PortalCtx): Router {
           <div class="field">
             <label for="rows">One per line <span class="hint">— <code>subAccountId, locationId, assistantId, label</code>.
               Commas or tabs, so a spreadsheet paste works. Leave the assistant blank and it is filled
-              in automatically when the subaccount has exactly one.</span></label>
+              in automatically when the subaccount has exactly one. Add <code>pit=&lt;token&gt;</code>
+              anywhere in a row to give that location its own GHL token.</span></label>
             <textarea id="rows" name="rows" spellcheck="false" required
-              placeholder="sub_a1b2, loc_9f8e, asst_1234, Main Street Dental&#10;sub_c3d4, loc_7a6b, , Riverside Chiropractic&#10;sub_e5f6, loc_5c4d">${esc(rowsText)}</textarea>
+              placeholder="sub_a1b2, loc_9f8e, asst_1234, Main Street Dental&#10;sub_c3d4, loc_7a6b, , Riverside Chiropractic&#10;sub_e5f6, loc_5c4d, , Lakeside Vets, pit=pit-abc123">${esc(rowsText)}</textarea>
           </div>
         </fieldset>
         <button type="submit" class="btn btn-primary">Validate &amp; connect all</button>
@@ -416,7 +420,13 @@ export function createPortalRouter(ctx: PortalCtx): Router {
       const why = errors.length
         ? errors.map((e) => (e.line ? `line ${e.line}: ${e.error}` : e.error)).join(" · ")
         : "no subaccounts were listed";
-      res.status(400).send(shell("Nothing to connect", batchForm(rowsText, why)));
+      // Echo the list back so the operator can fix it in place, but never write
+      // live tokens into an HTML response a proxy or log might retain.
+      const safe = redactPits(rowsText);
+      const note = safe === rowsText
+        ? why
+        : `${why}. Your pit= tokens were removed from this form — re-add them before submitting.`;
+      res.status(400).send(shell("Nothing to connect", batchForm(safe, note)));
       return;
     }
 

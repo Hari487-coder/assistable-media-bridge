@@ -107,6 +107,33 @@ The v3 API key must be **workspace-wide**, since every row is provisioned
 against its own `X-Subaccount-Id`. A key scoped to a single subaccount cannot
 reach the others.
 
+### GHL tokens: shared, per-location, or mixed
+
+A GHL Private Integration may be agency-wide or scoped to a single location
+depending on how it was minted, and the token itself does not say which. So the
+list supports both instead of assuming:
+
+```
+# one agency token for everything — paste it in Shared credentials
+sub_a1b2, loc_9f8e, asst_1234, Main Street Dental
+
+# this location needs its own
+sub_c3d4, loc_7a6b, , Riverside Chiropractic, pit=pit-abc123
+```
+
+`pit=<token>` may appear in any position in a row and overrides the shared
+token for that location only. It is keyed rather than a fifth positional column
+because the label deliberately absorbs trailing commas (`Main Street Dental,
+PC`), which a positional token would be ambiguous with.
+
+Leave the shared field blank if every location has its own. Each row is checked
+independently: a row with no token from either source fails alone, saying so.
+
+If a submission is rejected the list is echoed back so you can fix it in place,
+but `pit=` values are stripped first — a live token should not be written into
+an HTML response that a proxy or log might retain. Re-add them before
+resubmitting.
+
 Each row runs through the same validation, tool creation and reconnect path as
 the single form, four at a time, and a failing row never aborts the batch. So
 the workflow is: paste the list, fix whatever failed, paste the **whole list**

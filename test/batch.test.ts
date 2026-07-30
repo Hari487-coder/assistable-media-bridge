@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { MAX_BATCH_ROWS, parseBatchRows, provisionBatch } from "../src/core/batch";
+import { MAX_BATCH_ROWS, parseBatchRows, provisionBatch, redactPits } from "../src/core/batch";
 import { openDb } from "../src/db";
 import { createTenantStore } from "../src/store/tenants";
 
@@ -16,6 +16,7 @@ function makeCtx(opts: {
   const db = openDb(":memory:");
   const tenants = createTenantStore(db, Buffer.alloc(32, 5));
   const seenSubs: string[] = [];
+  const seenPits: string[] = [];
   const ctx = {
     tenants,
     publicBaseUrl: "https://media.example.com",
@@ -31,14 +32,17 @@ function makeCtx(opts: {
         updateToolUrl: async () => ({ ok: true as const }),
       };
     },
-    ghlFactory: () => ({
-      validatePit: async (locationId: string) => !(opts.failPitFor ?? []).includes(locationId),
-    }),
+    ghlFactory: (pit: string) => {
+      seenPits.push(pit);
+      return {
+        validatePit: async (locationId: string) => !(opts.failPitFor ?? []).includes(locationId),
+      };
+    },
     providerFactory: () => ({
       validateKey: async () => ({ ok: true as const }), describe: async () => "",
     }),
   };
-  return { ctx, tenants, seenSubs };
+  return { ctx, tenants, seenSubs, seenPits };
 }
 
 describe("parseBatchRows", () => {
@@ -68,6 +72,35 @@ describe("parseBatchRows", () => {
     expect(errors).toEqual([
       { line: 2, text: "broken", error: "expected at least: subAccountId, locationId" },
     ]);
+  });
+  it("extracts pit= from any position without disturbing positional fields", () => {
+    const { rows, errors } = parseBatchRows([
+      "sub_1, loc_1, asst_1, Main Street Dental, PC, pit=tok-a",
+      "sub_2, pit=tok-b, loc_2, asst_2, Riverside",
+      "sub_3, loc_3",
+    ].join("\n"));
+    expect(errors).toEqual([]);
+    // The label must still absorb its trailing comma — that is exactly why the
+    // token is keyed rather than a fifth positional column.
+    expect(rows[0]).toEqual({
+      subAccountId: "sub_1", locationId: "loc_1", assistantId: "asst_1",
+      label: "Main Street Dental, PC", ghlPit: "tok-a",
+    });
+    expect(rows[1]).toEqual({
+      subAccountId: "sub_2", locationId: "loc_2", assistantId: "asst_2",
+      label: "Riverside", ghlPit: "tok-b",
+    });
+    expect(rows[2].ghlPit).toBeUndefined();
+  });
+  it("keeps a live token out of the echoed error text", () => {
+    const { errors } = parseBatchRows("broken, pit=super-secret-token");
+    expect(errors[0].text).not.toContain("super-secret-token");
+    expect(errors[0].text).toContain("pit=");
+  });
+  it("redacts pit values while preserving row shape", () => {
+    expect(redactPits("sub_1, loc_1, pit=tok-a\nsub_2, loc_2, pit = tok-b"))
+      .toBe("sub_1, loc_1, pit=\nsub_2, loc_2, pit=");
+    expect(redactPits("sub_1, loc_1")).toBe("sub_1, loc_1");
   });
   it("refuses a list over the per-submission ceiling", () => {
     const text = Array.from({ length: MAX_BATCH_ROWS + 1 }, (_, i) => `sub_${i}, loc_${i}`).join("\n");
@@ -127,6 +160,37 @@ describe("provisionBatch", () => {
     expect(out.map((r) => r.ok)).toEqual([true, false, true]);
     expect(out[1].error).toMatch(/GHL/i);
     expect(tenants.list().map((t) => t.locationId).sort()).toEqual(["loc_1", "loc_3"]);
+  });
+  it("uses the per-row token when present, otherwise the shared one", async () => {
+    // Whether a GHL private integration is agency-wide or per-location depends
+    // on how it was minted, so both must work — including a mixed list.
+    const { ctx, seenPits } = makeCtx();
+    const { rows } = parseBatchRows(
+      "sub_1, loc_1, asst_default\nsub_2, loc_2, asst_default, Two, pit=own-token"
+    );
+    const out = await provisionBatch(ctx as never, shared, rows);
+    expect(out.every((r) => r.ok)).toBe(true);
+    expect(seenPits.sort()).toEqual(["own-token", shared.ghlPit].sort());
+  });
+  it("works with NO shared token when every row carries its own", async () => {
+    const { ctx, tenants } = makeCtx();
+    const { rows } = parseBatchRows(
+      "sub_1, loc_1, asst_default, One, pit=tok-1\nsub_2, loc_2, asst_default, Two, pit=tok-2"
+    );
+    const out = await provisionBatch(ctx as never, { ...shared, ghlPit: undefined }, rows);
+    expect(out.every((r) => r.ok)).toBe(true);
+    expect(tenants.getByLocationId("loc_1")?.ghlPit).toBe("tok-1");
+    expect(tenants.getByLocationId("loc_2")?.ghlPit).toBe("tok-2");
+  });
+  it("fails only the rows left with no token at all", async () => {
+    const { ctx, tenants } = makeCtx();
+    const { rows } = parseBatchRows(
+      "sub_1, loc_1, asst_default, One, pit=tok-1\nsub_2, loc_2, asst_default, Two"
+    );
+    const out = await provisionBatch(ctx as never, { ...shared, ghlPit: undefined }, rows);
+    expect(out.map((r) => r.ok)).toEqual([true, false]);
+    expect(out[1].error).toMatch(/pit=<token>/);
+    expect(tenants.list()).toHaveLength(1);
   });
   it("is re-runnable: a repeat batch reconnects instead of duplicating", async () => {
     const { ctx, tenants } = makeCtx({ failPitFor: ["loc_2"] });
