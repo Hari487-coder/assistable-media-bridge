@@ -199,7 +199,32 @@ If modalities cannot be read from GHL (e.g., PIT lacks permissions), the dashboa
 ## Architecture Notes
 
 - **Stores:** Tenants (in-memory + SQLite), Events (SQLite), Processed (in-memory, auto-pruned every hour)
-- **Waker:** Runs every 25s (configurable via `WAKER_INTERVAL_MS`). Cursor is in-memory; restart causes one prime cycle (no storm due to dedup).
+- **Waker:** Polls every `WAKER_INTERVAL_MS` (default 25s), `WAKER_CONCURRENCY` tenants at a time (default 4). Cursor is in-memory; restart causes one prime cycle (no storm due to dedup).
+- **Timeouts:** every v3 and GHL request carries a 15s abort signal. A hung request is worse than a failed one — it holds a waker slot indefinitely and stalls the tenants queued behind it.
+
+### Waker tuning
+
+| Variable | Default | What it does |
+| --- | --- | --- |
+| `WAKER_INTERVAL_MS` | `25000` | How often a poll pass starts |
+| `WAKER_CONCURRENCY` | `4` | Tenants polled at once (1–32) |
+| `WAKER_BUDGET_MS` | `20000` | Wall-clock ceiling for one tenant's cycle |
+
+Passes never overlap: if one runs long the next tick is skipped, so the
+*effective* interval silently stretches. Two things make that visible instead:
+
+- **Pass overran** — the service log warns whenever a pass takes longer than
+  `WAKER_INTERVAL_MS`, naming the duration and tenant count. That is the signal
+  to raise `WAKER_CONCURRENCY`.
+- **`poll_budget` event** — one tenant with a large backlog would otherwise hold
+  its slot for minutes. At `WAKER_BUDGET_MS` its cycle pauses and the event says
+  how far it got. Nothing is lost: the cursor only advances past conversations
+  that actually finished, so the remainder resumes next cycle. At least one
+  conversation is always processed per cycle, so progress is guaranteed even if
+  the budget is set below a single round-trip.
+
+Rough sizing: one pass costs roughly `tenants / concurrency` round-trips of
+latency in the quiet case. At the defaults, ~40 tenants still fits inside 25s.
 - **Providers:** Gemini (raw REST call to `generativelanguage.googleapis.com`, handles audio/image/PDF) and OpenAI (Whisper for audio, `gpt-4o-mini` vision for images; PDF unsupported). No provider SDK dependency — plain `fetch`. Each implements `describe({ kind, mime, bytes })` → text on the customer's BYO key.
 - **Crypto:** AES-256-GCM for credential encryption at rest; one fixed master key (`ENCRYPTION_KEY`), a fresh random IV on every write.
 

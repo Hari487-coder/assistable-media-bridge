@@ -1,3 +1,4 @@
+import { mapLimit } from "./concurrency";
 import { type ProvisionDeps, provisionTenant } from "./provision";
 import type { TenantInput } from "../store/tenants";
 
@@ -91,23 +92,6 @@ export function parseBatchRows(
     rows.length = 0;
   }
   return { rows, errors };
-}
-
-/** Run `fn` over `items` a few at a time, preserving input order in the result. */
-async function mapLimit<T, R>(
-  items: T[], limit: number, fn: (item: T) => Promise<R>
-): Promise<R[]> {
-  const out = new Array<R>(items.length);
-  let next = 0;
-  const worker = async () => {
-    // `next++` is atomic here: the increment is synchronous, and Node runs one
-    // turn at a time, so two workers can never claim the same index.
-    for (let i = next++; i < items.length; i = next++) out[i] = await fn(items[i]);
-  };
-  await Promise.all(
-    Array.from({ length: Math.min(limit, items.length) }, worker)
-  );
-  return out;
 }
 
 /**

@@ -178,12 +178,124 @@ describe("runWakerCycle", () => {
       inFlight -= 1;
       return { woken: 0 };
     };
-    const handle = startWaker(cycleFor, () => tenants, 1);
+    const handle = startWaker(cycleFor, () => tenants, 1, { concurrency: 1 });
     await new Promise((res) => setTimeout(res, 40));
     handle.stop();
     expect(seen).toContain("on");
     expect(seen).not.toContain("disabled");
     expect(seen).not.toContain("wakeroff");
     expect(maxInFlight).toBe(1); // reentrancy guard held
+  });
+
+  it("polls tenants concurrently, up to the configured limit", async () => {
+    // Serially, 8 tenants x 20ms is 160ms and grows linearly with the tenant
+    // count until it silently outruns the poll interval.
+    const tenants = Array.from({ length: 8 }, (_, i) => ({ ...tenant, id: `t${i}` })) as Tenant[];
+    let inFlight = 0;
+    let maxInFlight = 0;
+    const done: string[] = [];
+    const cycleFor = async (t: Tenant) => {
+      inFlight += 1; maxInFlight = Math.max(maxInFlight, inFlight);
+      await new Promise((res) => setTimeout(res, 20));
+      inFlight -= 1; done.push(t.id);
+      return { woken: 0 };
+    };
+    // Serve the list once so exactly one pass runs and the assertions are exact.
+    let served = false;
+    const listOnce = () => { if (served) return []; served = true; return tenants; };
+
+    const handle = startWaker(cycleFor, listOnce, 5, { concurrency: 4 });
+    await new Promise((res) => setTimeout(res, 120));
+    handle.stop();
+    expect(maxInFlight).toBeGreaterThan(1);
+    expect(maxInFlight).toBeLessThanOrEqual(4);
+    expect(done).toHaveLength(8); // every tenant still polled
+  });
+
+  it("reports a pass that outruns the poll interval instead of degrading silently", async () => {
+    const overruns: Array<{ durationMs: number; tenants: number }> = [];
+    const handle = startWaker(
+      async () => { await new Promise((res) => setTimeout(res, 30)); return { woken: 0 }; },
+      () => [tenant],
+      5,
+      { onOverrun: (i) => overruns.push(i) }
+    );
+    await new Promise((res) => setTimeout(res, 70));
+    handle.stop();
+    expect(overruns.length).toBeGreaterThan(0);
+    expect(overruns[0].tenants).toBe(1);
+    expect(overruns[0].durationMs).toBeGreaterThanOrEqual(30);
+  });
+
+  it("does not report an overrun when there is nothing to poll", async () => {
+    const overruns: unknown[] = [];
+    const handle = startWaker(
+      async () => ({ woken: 0 }),
+      () => [{ ...tenant, wakerEnabled: false } as Tenant],
+      1,
+      { onOverrun: () => overruns.push(1) }
+    );
+    await new Promise((res) => setTimeout(res, 30));
+    handle.stop();
+    expect(overruns).toHaveLength(0);
+  });
+});
+
+describe("runWakerCycle — per-cycle budget", () => {
+  const manyConvs = (n: number) =>
+    Array.from({ length: n }, (_, i) => ({
+      id: `c${i}`, contactId: "x",
+      updatedAt: `2026-07-23T${String(10 + i).padStart(2, "0")}:00:00Z`,
+      assistant: { id: "A" },
+    }));
+
+  function slowDeps(convCount: number, perCallMs: number, budgetMs: number) {
+    const db = openDb(":memory:");
+    const looked: string[] = [];
+    return {
+      looked,
+      deps: {
+        v3: {
+          listConversations: async () => manyConvs(convCount),
+          listMessages: async (id: string) => {
+            looked.push(id);
+            await new Promise((res) => setTimeout(res, perCallMs));
+            return [];
+          },
+          chatCompletion: async () => ({ ok: true as const }),
+          assignTool: async () => ({ ok: true as const }),
+        },
+        processed: createProcessedStore(db),
+        events: createEventStore(db),
+        state: new Map<string, string>([["t1", "2026-07-23T00:00:00Z"]]),
+        budgetMs,
+      },
+    };
+  }
+
+  it("stops early and leaves the rest for the next cycle", async () => {
+    const { deps, looked } = slowDeps(10, 12, 30);
+    await runWakerCycle(deps as never, tenant);
+    // Bounded well below all 10 — one slow tenant must not hold its slot for
+    // the whole list while every other tenant waits behind it.
+    expect(looked.length).toBeGreaterThan(0);
+    expect(looked.length).toBeLessThan(10);
+    expect(deps.events.latest("t1", 20).some((e) => e.kind === "poll_budget")).toBe(true);
+
+    // The cursor stopped at the last FINISHED conversation, so the untouched
+    // ones are still pending — the next cycle resumes exactly there.
+    const resumed = deps.state.get("t1") ?? "";
+    expect(resumed < "2026-07-23T19:00:00Z").toBe(true);
+    const before = looked.length;
+    await runWakerCycle(deps as never, tenant);
+    expect(looked.length).toBeGreaterThan(before);
+  });
+
+  it("always makes progress even when the budget is smaller than one round-trip", async () => {
+    // Guards against a livelock: budget 0 must not mean "never advance".
+    const { deps, looked } = slowDeps(5, 5, 0);
+    await runWakerCycle(deps as never, tenant);
+    expect(looked).toEqual(["c0"]);
+    expect(deps.state.get("t1")).toBe("2026-07-23T10:00:00Z");
   });
 });

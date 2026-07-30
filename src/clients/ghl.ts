@@ -1,4 +1,11 @@
-export interface GhlClientOptions { baseUrl: string; pit: string; fetchImpl?: typeof fetch }
+export interface GhlClientOptions {
+  baseUrl: string; pit: string; fetchImpl?: typeof fetch;
+  /** Per-request ceiling — see the note on V3ClientOptions.timeoutMs. Here it
+   *  keeps a hung GHL read from parking a contact's tool-call queue forever. */
+  timeoutMs?: number;
+}
+
+const DEFAULT_TIMEOUT_MS = 15_000;
 
 interface GhlMessage {
   id: string; direction?: string; attachments?: unknown; dateAdded?: string;
@@ -7,13 +14,20 @@ interface GhlMessage {
 export function createGhlClient(opts: GhlClientOptions) {
   const f = opts.fetchImpl ?? fetch;
   const get = async (path: string) => {
-    const res = await f(`${opts.baseUrl}${path}`, {
-      headers: {
-        Authorization: `Bearer ${opts.pit}`,
-        Version: "2021-07-28",
-        Accept: "application/json",
-      },
-    });
+    let res: Response;
+    try {
+      res = await f(`${opts.baseUrl}${path}`, {
+        signal: AbortSignal.timeout(opts.timeoutMs ?? DEFAULT_TIMEOUT_MS),
+        headers: {
+          Authorization: `Bearer ${opts.pit}`,
+          Version: "2021-07-28",
+          Accept: "application/json",
+        },
+      });
+    } catch (err) {
+      const timedOut = err instanceof Error && (err.name === "TimeoutError" || err.name === "AbortError");
+      throw new Error(timedOut ? `timed out after ${opts.timeoutMs ?? DEFAULT_TIMEOUT_MS}ms` : "network error");
+    }
     let json: unknown = null;
     try { json = await res.json(); } catch { /* tolerate empty */ }
     return { ok: res.ok, status: res.status, json: json as Record<string, unknown> | null };

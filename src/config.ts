@@ -16,11 +16,18 @@ const envSchema = z.object({
   // in each tenant's assistant, so it must be the service's real public URL.
   PUBLIC_BASE_URL: z.string().optional(),
   RENDER_EXTERNAL_URL: z.string().optional(),
+  // Waker tuning. Defaults suit a handful of tenants; an instance serving an
+  // agency's worth of subaccounts raises concurrency (and watches for the
+  // pass-overran warning) rather than shortening the interval.
+  WAKER_INTERVAL_MS: z.coerce.number().int().positive().default(25_000),
+  WAKER_CONCURRENCY: z.coerce.number().int().positive().max(32).default(4),
+  WAKER_BUDGET_MS: z.coerce.number().int().positive().default(20_000),
 });
 
 export interface AppConfig {
   port: number; mock: boolean; dbPath: string; encryptionKey: Buffer;
   v3BaseUrl: string; ghlBaseUrl: string; publicBaseUrl: string;
+  wakerIntervalMs: number; wakerConcurrency: number; wakerBudgetMs: number;
 }
 
 export function loadConfig(): AppConfig {
@@ -50,5 +57,8 @@ export function loadConfig(): AppConfig {
     v3BaseUrl,
     ghlBaseUrl: e.GHL_BASE_URL.replace(/\/$/, ""),
     publicBaseUrl: publicBaseUrl.replace(/\/$/, ""),
+    wakerIntervalMs: e.WAKER_INTERVAL_MS,
+    wakerConcurrency: e.WAKER_CONCURRENCY,
+    wakerBudgetMs: e.WAKER_BUDGET_MS,
   };
 }

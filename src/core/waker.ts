@@ -2,6 +2,7 @@ import type { V3Client } from "../clients/v3";
 import type { EventStore } from "../store/events";
 import type { ProcessedStore } from "../store/processed";
 import type { Tenant } from "../store/tenants";
+import { mapLimit } from "./concurrency";
 
 export type WakerState = Map<string, string>;
 
@@ -10,7 +11,22 @@ export interface WakerDeps {
   processed: ProcessedStore;
   events: EventStore;
   state: WakerState;
+  /** Wall-clock ceiling for one tenant's cycle. See CYCLE_BUDGET_MS. */
+  budgetMs?: number;
 }
+
+// A tenant whose conversations all went quiet at once can have a long `pending`
+// list, and each entry costs a listMessages round-trip. Left unbounded, that one
+// tenant holds its concurrency slot for minutes while everybody else waits. The
+// budget stops the loop early and — because the cursor only advances past
+// conversations we actually finished — the remainder is picked up next cycle.
+// Not a deadline on work, just on how much of it happens per turn.
+export const CYCLE_BUDGET_MS = 20_000;
+
+// Tenants polled at once. Sequential meant a pass grew linearly with tenant
+// count until it silently outran the poll interval; unbounded would hammer the
+// v3 rate limiter and trip its concurrency cap.
+export const DEFAULT_WAKER_CONCURRENCY = 4;
 
 // Top-N recency window. A busy tenant with more than this many conversations
 // updated within one poll interval can lag on the overflow until they get
@@ -92,7 +108,20 @@ export async function runWakerCycle(deps: WakerDeps, tenant: Tenant): Promise<{ 
 
   let advanceTo = cursor;
   let woken = 0;
+  let handled = 0;
+  const startedAt = Date.now();
+  const budgetMs = deps.budgetMs ?? CYCLE_BUDGET_MS;
   for (const conv of pending) {
+    // Checked only AFTER the first conversation: a budget too small for even one
+    // round-trip must still make progress, or the cursor never moves and the
+    // tenant livelocks.
+    if (handled > 0 && Date.now() - startedAt > budgetMs) {
+      deps.events.record(
+        tenant.id, "poll_budget",
+        `paused after ${handled}/${pending.length} conversations (${budgetMs}ms budget) — the rest resume next cycle`
+      );
+      break;
+    }
     try {
       const messages = await deps.v3.listMessages(conv.id);
       const fresh = messages.filter(
@@ -118,6 +147,7 @@ export async function runWakerCycle(deps: WakerDeps, tenant: Tenant): Promise<{ 
       }
       // Conversation fully handled → safe to advance the cursor past it.
       advanceTo = conv.updatedAt > advanceTo ? conv.updatedAt : advanceTo;
+      handled += 1;
     } catch (err) {
       // Hard throw: record and STOP advancing. Nothing marked, cursor stays →
       // this conversation and all later ones retry next cycle.
@@ -132,26 +162,55 @@ export async function runWakerCycle(deps: WakerDeps, tenant: Tenant): Promise<{ 
   return { woken };
 }
 
+export interface WakerRuntimeOptions {
+  concurrency?: number;
+  /** Called when one pass outruns the poll interval. Injectable for tests; the
+   *  default writes to the service log, which is where an operator would look. */
+  onOverrun?: (info: { durationMs: number; tenants: number; intervalMs: number }) => void;
+}
+
+const defaultOnOverrun = (i: { durationMs: number; tenants: number; intervalMs: number }) => {
+  console.warn(
+    `[media-mcp] waker pass took ${i.durationMs}ms across ${i.tenants} tenant(s), longer than the ` +
+    `${i.intervalMs}ms poll interval — attachments are now detected more slowly than configured. ` +
+    "Raise WAKER_CONCURRENCY, or WAKER_INTERVAL_MS to match reality."
+  );
+};
+
 export function startWaker(
   cycleFor: (tenant: Tenant) => Promise<{ woken: number }>,
   listTenants: () => Tenant[],
-  intervalMs: number
+  intervalMs: number,
+  opts: WakerRuntimeOptions = {}
 ): { stop(): void } {
+  const concurrency = Math.max(1, opts.concurrency ?? DEFAULT_WAKER_CONCURRENCY);
+  const onOverrun = opts.onOverrun ?? defaultOnOverrun;
   let running = false;
   const timer = setInterval(async () => {
     if (running) return; // no overlapping passes if a cycle runs long
     running = true;
+    const startedAt = Date.now();
+    let due: Tenant[] = [];
     try {
-      for (const t of listTenants()) {
-        if (!t.enabled || !t.wakerEnabled) continue;
+      due = listTenants().filter((t) => t.enabled && t.wakerEnabled);
+      await mapLimit(due, concurrency, async (t) => {
         try {
           await cycleFor(t);
         } catch {
           // per-tenant isolation — one tenant's failure never stalls others
         }
-      }
+      });
     } finally {
       running = false;
+      // The reentrancy guard means an overrunning pass degrades SILENTLY: the
+      // next tick is skipped and the effective interval stretches with nothing
+      // to show for it. This is the only signal that it is happening.
+      const durationMs = Date.now() - startedAt;
+      if (due.length > 0 && durationMs > intervalMs) {
+        try {
+          onOverrun({ durationMs, tenants: due.length, intervalMs });
+        } catch { /* reporting must never break the poll loop */ }
+      }
     }
   }, intervalMs);
   timer.unref?.();

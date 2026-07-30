@@ -47,6 +47,9 @@ describe("mock-mode e2e", () => {
       v3BaseUrl: "https://app.assistable.ai",
       ghlBaseUrl: "https://services.leadconnectorhq.com",
       publicBaseUrl: "https://x",
+      wakerIntervalMs: 25_000,
+      wakerConcurrency: 4,
+      wakerBudgetMs: 20_000,
     };
     const { app } = buildApp(cfg);
 

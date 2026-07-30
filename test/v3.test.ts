@@ -118,3 +118,28 @@ describe("v3 client", () => {
     expect(res.error).toContain("assistant not found");
   });
 });
+
+describe("v3 client — request timeout", () => {
+  // A hung v3 call is worse than a failed one: it holds a waker concurrency
+  // slot indefinitely and stalls every tenant queued behind it.
+  const hangingFetch = (async (_url: string, init: RequestInit = {}) =>
+    new Promise<Response>((_resolve, reject) => {
+      init.signal?.addEventListener("abort", () => {
+        reject(Object.assign(new Error("aborted"), { name: "TimeoutError" }));
+      });
+    })) as typeof fetch;
+
+  it("aborts a request that never responds, surfaced as a normal call failure", async () => {
+    const v3 = createV3Client({
+      baseUrl: "https://x", apiKey: "K", fetchImpl: hangingFetch, timeoutMs: 20,
+    });
+    await expect(v3.listConversations(10)).rejects.toThrow(/timed out after 20ms/);
+  });
+
+  it("passes an abort signal on every request", async () => {
+    const { impl, calls } = fakeFetch({ "v3/conversations?": { body: { ok: true, data: [] } } });
+    const v3 = createV3Client({ baseUrl: "https://x", apiKey: "K", fetchImpl: impl });
+    await v3.listConversations(1);
+    expect(calls[0].init.signal).toBeDefined();
+  });
+});

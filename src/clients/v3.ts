@@ -5,7 +5,13 @@ export interface V3ClientOptions {
    *  that span multiple subaccounts; a single-subaccount key resolves itself. */
   subAccountId?: string;
   fetchImpl?: typeof fetch;
+  /** Per-request ceiling. A hung request is worse than a failed one: it holds a
+   *  waker concurrency slot indefinitely and stalls the tenants queued behind
+   *  it, with nothing in the event feed to show why. */
+  timeoutMs?: number;
 }
+
+const DEFAULT_TIMEOUT_MS = 15_000;
 
 // Platform envelope is { data, error, request_id }; lists may be keyed or bare.
 function unwrap(json: unknown): unknown {
@@ -45,11 +51,20 @@ export function createV3Client(opts: V3ClientOptions) {
       headers["Content-Type"] = "application/json";
       sendBody = opts.subAccountId ? { subaccount_id: opts.subAccountId, ...body } : body;
     }
-    const res = await f(`${opts.baseUrl}/${path}`, {
-      method,
-      headers,
-      ...(sendBody !== undefined ? { body: JSON.stringify(sendBody) } : {}),
-    });
+    let res: Response;
+    try {
+      res = await f(`${opts.baseUrl}/${path}`, {
+        method,
+        headers,
+        signal: AbortSignal.timeout(opts.timeoutMs ?? DEFAULT_TIMEOUT_MS),
+        ...(sendBody !== undefined ? { body: JSON.stringify(sendBody) } : {}),
+      });
+    } catch (err) {
+      // Surface a timeout as a normal call failure so every caller's existing
+      // error handling applies — the waker records it and retries next cycle.
+      const timedOut = err instanceof Error && (err.name === "TimeoutError" || err.name === "AbortError");
+      throw new Error(timedOut ? `timed out after ${opts.timeoutMs ?? DEFAULT_TIMEOUT_MS}ms` : "network error");
+    }
     let json: unknown = null;
     try { json = await res.json(); } catch { /* non-JSON error body */ }
     const bodyOk = !(json && typeof json === "object" && (json as { ok?: unknown }).ok === false);

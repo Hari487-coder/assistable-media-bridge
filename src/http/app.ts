@@ -50,6 +50,7 @@ export function buildApp(config: AppConfig) {
 
   const wakerDepsFor = (t: Tenant): WakerDeps => ({
     v3: v3For(t.v3Key, t.subAccountId), processed, events, state: wakerState,
+    budgetMs: config.wakerBudgetMs,
   });
 
   return {
