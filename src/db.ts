@@ -14,7 +14,7 @@ export function openDb(path: string): Db {
       waker_enabled INTEGER NOT NULL DEFAULT 1,
       tool_id TEXT, enabled INTEGER NOT NULL DEFAULT 1,
       audio_on INTEGER NOT NULL DEFAULT 1, image_on INTEGER NOT NULL DEFAULT 1,
-      sub_account_id TEXT,
+      sub_account_id TEXT, analysis_instruction TEXT,
       created_at INTEGER NOT NULL
     );
     CREATE TABLE IF NOT EXISTS processed (
@@ -32,6 +32,7 @@ export function openDb(path: string): Db {
   // duplicate-column error on an already-migrated DB.
   for (const stmt of [
     "ALTER TABLE tenants ADD COLUMN sub_account_id TEXT",
+    "ALTER TABLE tenants ADD COLUMN analysis_instruction TEXT",
   ]) {
     try { db.exec(stmt); } catch { /* column already present */ }
   }

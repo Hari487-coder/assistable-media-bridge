@@ -117,6 +117,43 @@ describe("portal", () => {
     expect(after.text).not.toContain("Retry tool setup");
     expect(after.text).toContain("tool_1");
   });
+  it("dashboard saves, renders and clears the analysis guidance", async () => {
+    const { app, tenants, events } = makeApp();
+    const t = tenants.create({
+      label: "V", locationId: "L1", assistantId: "A1",
+      provider: "gemini", v3Key: "v", ghlPit: "p", aiKey: "k",
+    });
+    const save = await request(app).post(`/dashboard/${t.token}/instruction`)
+      .type("form").send({ instruction: "Extract amount and reference number." });
+    expect(save.status).toBe(302);
+    expect(tenants.getByToken(t.token)?.analysisInstruction).toBe("Extract amount and reference number.");
+
+    const page = await request(app).get(`/dashboard/${t.token}`);
+    expect(page.text).toContain("Extract amount and reference number.");
+    // The reader extracts; it does not verify. Say so where it is configured.
+    expect(page.text).toContain("never let the assistant confirm a payment");
+    expect(events.latest(t.id, 5).some((e) => e.kind === "config")).toBe(true);
+
+    await request(app).post(`/dashboard/${t.token}/instruction`).type("form").send({ instruction: "" });
+    expect(tenants.getByToken(t.token)?.analysisInstruction).toBeNull();
+  });
+  it("escapes the analysis guidance in the dashboard textarea (no XSS)", async () => {
+    const { app, tenants } = makeApp();
+    const t = tenants.create({
+      label: "V", locationId: "L1", assistantId: "A1",
+      provider: "gemini", v3Key: "v", ghlPit: "p", aiKey: "k",
+    });
+    await request(app).post(`/dashboard/${t.token}/instruction`)
+      .type("form").send({ instruction: "</textarea><script>alert(1)</script>" });
+    const page = await request(app).get(`/dashboard/${t.token}`);
+    expect(page.text).not.toContain("<script>alert(1)</script>");
+    expect(page.text).toContain("&lt;/textarea&gt;&lt;script&gt;");
+  });
+  it("saving guidance on an unknown token 404s", async () => {
+    const { app } = makeApp();
+    const res = await request(app).post("/dashboard/nope/instruction").type("form").send({ instruction: "x" });
+    expect(res.status).toBe(404);
+  });
   it("retry-tool on an unknown token 404s", async () => {
     const { app } = makeApp();
     const res = await request(app).post("/dashboard/nope/retry-tool");

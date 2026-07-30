@@ -9,7 +9,7 @@ const tenant = {
   id: "t1", token: "tok", label: "T", locationId: "L", assistantId: "A",
   provider: "gemini", v3Key: "v", ghlPit: "p", aiKey: "k",
   wakerEnabled: true, toolId: null, enabled: true,
-  modalities: { audio: true, image: true },
+  modalities: { audio: true, image: true }, analysisInstruction: null,
 } as Tenant;
 
 const oggBytes = new TextEncoder().encode("OggS....voicedata");
@@ -133,5 +133,37 @@ describe("analyzeForContact", () => {
     expect(r.text).toContain("no new attachments");
     expect(r.processedIds).toEqual([]);
     expect(d.processed.has("t1", "gEmpty")).toBe(false);
+  });
+});
+
+describe("analyzeForContact — per-tenant analysis instruction", () => {
+  it("forwards the tenant's guidance to the provider", async () => {
+    const seen: Array<string | null | undefined> = [];
+    const d = deps({
+      provider: {
+        describe: async (i: { instruction?: string | null }) => {
+          seen.push(i.instruction);
+          return "receipt: $250 ref 88231";
+        },
+        validateKey: async () => ({ ok: true as const }),
+      },
+    });
+    const withGuidance = {
+      ...tenant, analysisInstruction: "Extract amount and reference number.",
+    } as Tenant;
+    const r = await analyzeForContact(d as never, withGuidance, "C1");
+    expect(seen).toEqual(["Extract amount and reference number."]);
+    expect(r.text).toContain("receipt: $250 ref 88231");
+  });
+  it("sends nothing extra when no guidance is set", async () => {
+    const seen: Array<string | null | undefined> = [];
+    const d = deps({
+      provider: {
+        describe: async (i: { instruction?: string | null }) => { seen.push(i.instruction); return "x"; },
+        validateKey: async () => ({ ok: true as const }),
+      },
+    });
+    await analyzeForContact(d as never, tenant, "C1");
+    expect(seen).toEqual([null]);
   });
 });

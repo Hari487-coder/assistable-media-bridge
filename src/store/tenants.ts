@@ -11,14 +11,22 @@ export interface TenantInput {
 export interface Tenant extends TenantInput {
   id: string; token: string; wakerEnabled: boolean; toolId: string | null;
   enabled: boolean; modalities: { audio: boolean; image: boolean };
+  /** Extra guidance appended to the built-in extraction prompt. Set from the
+   *  dashboard, NOT part of TenantInput — it is an operational setting like the
+   *  kill switches, so re-onboarding a location never wipes it. */
+  analysisInstruction: string | null;
 }
+
+/** An instruction rides on every provider call for this tenant, so it is capped:
+ *  unbounded text is unbounded cost on every attachment. */
+export const MAX_ANALYSIS_INSTRUCTION = 500;
 
 type Row = {
   id: string; token: string; label: string; location_id: string;
   assistant_id: string; provider: string; v3_key_enc: string;
   ghl_pit_enc: string; ai_key_enc: string; waker_enabled: number;
   tool_id: string | null; enabled: number; audio_on: number; image_on: number;
-  sub_account_id: string | null;
+  sub_account_id: string | null; analysis_instruction: string | null;
 };
 
 export function createTenantStore(db: Db, key: Buffer) {
@@ -31,6 +39,7 @@ export function createTenantStore(db: Db, key: Buffer) {
     wakerEnabled: r.waker_enabled === 1, toolId: r.tool_id,
     enabled: r.enabled === 1,
     modalities: { audio: r.audio_on === 1, image: r.image_on === 1 },
+    analysisInstruction: r.analysis_instruction || null,
     ...(r.sub_account_id ? { subAccountId: r.sub_account_id } : {}),
   });
   const get = (sql: string, ...args: (string | number | null)[]): Tenant | null => {
@@ -109,6 +118,12 @@ export function createTenantStore(db: Db, key: Buffer) {
     },
     setWaker(id: string, on: boolean) {
       db.prepare("UPDATE tenants SET waker_enabled = ? WHERE id = ?").run(on ? 1 : 0, id);
+    },
+    /** Empty/blank clears it. Trimmed and capped — see MAX_ANALYSIS_INSTRUCTION. */
+    setAnalysisInstruction(id: string, text: string | null) {
+      const clean = (text ?? "").trim().slice(0, MAX_ANALYSIS_INSTRUCTION);
+      db.prepare("UPDATE tenants SET analysis_instruction = ? WHERE id = ?")
+        .run(clean || null, id);
     },
     setModality(id: string, which: "audio" | "image", on: boolean) {
       const col = which === "audio" ? "audio_on" : "image_on";

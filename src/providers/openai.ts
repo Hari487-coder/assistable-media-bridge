@@ -1,4 +1,4 @@
-import { type MediaInput, type MediaProvider, PROMPTS, toBase64 } from "./types";
+import { type MediaInput, type MediaProvider, buildPrompt, toBase64 } from "./types";
 
 const BASE = process.env.OPENAI_BASE_URL ?? "https://api.openai.com";
 const AUDIO_EXT: Record<string, string> = {
@@ -31,7 +31,7 @@ export function openaiProvider(apiKey: string, fetchImpl?: typeof fetch): MediaP
           model: "gpt-4o-mini",
           messages: [{ role: "user", content: [
             { type: "image_url", image_url: { url: `data:${input.mime};base64,${toBase64(input.bytes)}` } },
-            { type: "text", text: PROMPTS.image },
+            { type: "text", text: buildPrompt("image", input.instruction) },
           ] }],
         }),
       });

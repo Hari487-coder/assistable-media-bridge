@@ -123,3 +123,40 @@ describe("mcp endpoint", () => {
     expect(parsed.modalities).toBeDefined();
   });
 });
+
+describe("mcp endpoint — per-tenant analysis instruction", () => {
+  it("forwards the tenant's guidance on the MCP door too", async () => {
+    // The three doors (tool endpoint, waker-driven tool call, MCP) must behave
+    // identically — guidance that only applied to some would be a silent
+    // inconsistency the operator could not see from the dashboard.
+    const db = openDb(":memory:");
+    const tenants = createTenantStore(db, Buffer.alloc(32, 1));
+    const t = tenants.create({
+      label: "T", locationId: "L1", assistantId: "A1", provider: "gemini",
+      v3Key: "v", ghlPit: "p", aiKey: "k",
+    });
+    tenants.setAnalysisInstruction(t.id, "Extract amount and reference number.");
+
+    const seen: Array<string | null | undefined> = [];
+    const app = express();
+    app.use(express.json());
+    app.use(createMcpRouter({
+      tenants,
+      events: createEventStore(db),
+      providerFactory: () => ({
+        describe: async (i: { instruction?: string | null }) => { seen.push(i.instruction); return "ok"; },
+        validateKey: async () => ({ ok: true as const }),
+      }),
+      mediaFetch: (async () => new Response(oggBytes)) as unknown as typeof fetch,
+    }));
+
+    await request(app)
+      .post(`/mcp/${t.token}`)
+      .set("Accept", "application/json, text/event-stream")
+      .send(rpc("tools/call", {
+        name: "analyze_attachment",
+        arguments: { url: "https://storage.msgsndr.com/a.ogg" },
+      }));
+    expect(seen).toEqual(["Extract amount and reference number."]);
+  });
+});

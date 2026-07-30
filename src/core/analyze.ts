@@ -83,7 +83,10 @@ export async function analyzeForContact(
           sections.push("[image processing is disabled for this account]");
           continue;
         }
-        const text = await deps.provider.describe({ kind: s.kind, mime: s.mime, bytes: dl.bytes });
+        const text = await deps.provider.describe({
+          kind: s.kind, mime: s.mime, bytes: dl.bytes,
+          instruction: tenant.analysisInstruction,
+        });
         sections.push(`${LABELS[s.kind]}: ${text}`);
       } catch (err) {
         // Blanket guard: NOTHING inside the per-attachment body may throw out

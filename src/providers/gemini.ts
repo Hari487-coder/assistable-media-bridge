@@ -1,4 +1,4 @@
-import { type MediaInput, type MediaProvider, PROMPTS, toBase64 } from "./types";
+import { type MediaInput, type MediaProvider, buildPrompt, toBase64 } from "./types";
 
 const BASE = process.env.GEMINI_BASE_URL ?? "https://generativelanguage.googleapis.com";
 // Rolling alias, not a pinned version: Google retires pinned Gemini models on
@@ -62,7 +62,7 @@ export function geminiProvider(apiKey: string, fetchImpl?: typeof fetch): MediaP
     describe: async (input: MediaInput) => {
       const parts = [
         { inline_data: { mime_type: input.mime, data: toBase64(input.bytes) } },
-        { text: PROMPTS[input.kind] },
+        { text: buildPrompt(input.kind, input.instruction) },
       ];
       const model = resolvedByKey.get(apiKey) ?? MODEL;
       try {

@@ -53,7 +53,10 @@ function buildServer(ctx: McpRouterCtx, tenant: Tenant): McpServer {
     if (r.sniffed.kind === "image" && !tenant.modalities.image)
       return fail("[image processing is disabled for this account]");
     try {
-      const described = await provider.describe({ kind: r.sniffed.kind, mime: r.sniffed.mime, bytes: r.bytes });
+      const described = await provider.describe({
+        kind: r.sniffed.kind, mime: r.sniffed.mime, bytes: r.bytes,
+        instruction: tenant.analysisInstruction,
+      });
       record("mcp_call", `kind=${r.sniffed.kind}`);
       return text(described);
     } catch (err) {

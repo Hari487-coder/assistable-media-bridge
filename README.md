@@ -176,6 +176,33 @@ All toggles live on the dashboard (`/dashboard/:token`):
 - **Voice notes on/off** — silence audio analysis
 - **Images on/off** — silence image analysis
 
+## Telling the Reader What to Look For
+
+By default the reader does generic extraction: verbatim transcript for audio,
+full OCR plus a one-line description for images, full text plus a summary for
+PDFs. That reliably captures the headline figure on a receipt and routinely
+garbles the small print — a reference id, a last-4, a bank name.
+
+The dashboard has an **Extra guidance** box per subaccount. Whatever you put
+there is appended to the built-in prompt on every attachment, on all three
+doors:
+
+```
+Receipts are common here. Always extract the amount, currency, date,
+payer name and any reference or transaction number.
+```
+
+The built-in prompt always goes first, so guidance adds focus and never
+replaces the base extraction. Capped at 500 characters, since it rides on every
+provider call. It is an operational setting like the kill switches, so
+re-onboarding the location does not wipe it.
+
+> **This changes what the reader extracts, not what is true.** A receipt
+> screenshot takes seconds to fake and vision models misread digits. Use the
+> output to *populate* a payment check, never to *be* one — confirm against the
+> payment provider or invoice record before the assistant tells a customer
+> anything is paid.
+
 Waker also respects per-tenant flags set via `TenantStore.setWaker()` and per-modality toggles set via `setModality()`.
 
 ## Privacy & No-Persist Model

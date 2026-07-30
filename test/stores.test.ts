@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { openDb } from "../src/db";
-import { createTenantStore } from "../src/store/tenants";
+import { MAX_ANALYSIS_INSTRUCTION, createTenantStore } from "../src/store/tenants";
 import { createProcessedStore } from "../src/store/processed";
 import { createEventStore } from "../src/store/events";
 
@@ -70,6 +70,32 @@ describe("tenant store — reconnect by location", () => {
     expect(again.tenant.assistantId).toBe("asst_2");
     expect(again.tenant.aiKey).toBe("gk2");
     expect((db.prepare("SELECT COUNT(*) AS n FROM tenants").get() as { n: number }).n).toBe(1);
+  });
+  it("keeps the analysis guidance through a reconnect", () => {
+    // It is an operational setting like the kill switches, not part of the
+    // onboarding form — re-pasting credentials must not silently wipe it.
+    const { tenants } = mk();
+    const t = tenants.createOrUpdateByLocation(input).tenant;
+    expect(t.analysisInstruction).toBeNull();
+    tenants.setAnalysisInstruction(t.id, "Extract amount and reference number.");
+
+    const again = tenants.createOrUpdateByLocation({ ...input, label: "Renamed" });
+    expect(again.reconnected).toBe(true);
+    expect(again.tenant.analysisInstruction).toBe("Extract amount and reference number.");
+  });
+  it("trims, caps and clears the analysis guidance", () => {
+    const { tenants } = mk();
+    const t = tenants.create(input);
+
+    tenants.setAnalysisInstruction(t.id, "   padded   ");
+    expect(tenants.getByToken(t.token)?.analysisInstruction).toBe("padded");
+
+    // It rides on EVERY provider call, so unbounded text is unbounded cost.
+    tenants.setAnalysisInstruction(t.id, "x".repeat(MAX_ANALYSIS_INSTRUCTION + 200));
+    expect(tenants.getByToken(t.token)?.analysisInstruction?.length).toBe(MAX_ANALYSIS_INSTRUCTION);
+
+    tenants.setAnalysisInstruction(t.id, "   ");
+    expect(tenants.getByToken(t.token)?.analysisInstruction).toBeNull();
   });
   it("drops the stored toolId when the reconnect moves the tenant to another subaccount", () => {
     const { tenants } = mk();

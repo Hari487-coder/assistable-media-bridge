@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { getProvider } from "../src/providers";
+import { PROMPTS, buildPrompt } from "../src/providers/types";
 
 const capture = (body: unknown) => {
   const calls: Array<{ url: string; init: RequestInit }> = [];
@@ -179,5 +180,43 @@ describe("error handling", () => {
     const r = await oBad.validateKey();
     expect(r.ok).toBe(false);
     expect(r.detail).toBe("HTTP 401: Incorrect API key provided");
+  });
+});
+
+describe("per-tenant analysis instruction", () => {
+  it("appends the instruction without replacing the built-in extraction prompt", () => {
+    const base = buildPrompt("image");
+    const withExtra = buildPrompt("image", "Extract the amount and reference number.");
+    expect(base).toBe(PROMPTS.image);
+    // The base task stays anchored — an instruction that replaced it would
+    // silently drop OCR from every other conversation.
+    expect(withExtra.startsWith(PROMPTS.image)).toBe(true);
+    expect(withExtra).toContain("Extract the amount and reference number.");
+  });
+  it("ignores a blank or whitespace-only instruction", () => {
+    expect(buildPrompt("audio", "")).toBe(PROMPTS.audio);
+    expect(buildPrompt("audio", "   \n ")).toBe(PROMPTS.audio);
+    expect(buildPrompt("audio", null)).toBe(PROMPTS.audio);
+  });
+  it("reaches the gemini request body", async () => {
+    const { impl, calls } = capture({ candidates: [{ content: { parts: [{ text: "ok" }] } }] });
+    await getProvider("gemini", "GK", impl).describe({
+      kind: "image", mime: "image/png", bytes: new Uint8Array([1]),
+      instruction: "Note the transaction id.",
+    });
+    const body = JSON.parse(String(calls[0].init.body));
+    expect(body.contents[0].parts[1].text).toContain("Note the transaction id.");
+    expect(body.contents[0].parts[1].text).toContain("OCR");
+  });
+  it("reaches the openai vision request body", async () => {
+    const { impl, calls } = capture({ choices: [{ message: { content: "ok" } }] });
+    await getProvider("openai", "OK", impl).describe({
+      kind: "image", mime: "image/png", bytes: new Uint8Array([1]),
+      instruction: "Note the transaction id.",
+    });
+    const body = JSON.parse(String(calls[0].init.body));
+    const textPart = body.messages[0].content.find((c: { type: string }) => c.type === "text");
+    expect(textPart.text).toContain("Note the transaction id.");
+    expect(textPart.text).toContain("OCR");
   });
 });

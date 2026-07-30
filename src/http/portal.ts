@@ -2,6 +2,7 @@ import { Router } from "express";
 import { parseBatchRows, provisionBatch } from "../core/batch";
 import { PROMPT_SNIPPET, type ProvisionDeps, ensureTool, provisionTenant } from "../core/provision";
 import type { EventStore } from "../store/events";
+import { MAX_ANALYSIS_INSTRUCTION } from "../store/tenants";
 
 export interface PortalCtx extends ProvisionDeps { events: EventStore }
 
@@ -524,6 +525,25 @@ export function createPortalRouter(ctx: PortalCtx): Router {
             <button class="btn btn-ghost" name="what" value="image">Turn images ${t.modalities.image ? "off" : "on"}</button>
           </div>
         </form>
+        <div class="section-title">What to look for</div>
+        <form method="post" action="/dashboard/${t.token}/instruction">
+          <div class="field">
+            <label for="instruction">Extra guidance <span class="hint">— appended to the built-in
+              extraction prompt for every attachment. Leave blank for the default.</span></label>
+            <textarea id="instruction" name="instruction" spellcheck="false" style="min-height:96px"
+              maxlength="${MAX_ANALYSIS_INSTRUCTION}"
+              placeholder="e.g. Receipts are common here. Always extract the amount, currency, date, payer name and any reference or transaction number.">${esc(t.analysisInstruction ?? "")}</textarea>
+          </div>
+          <div class="callout warn">
+            <span class="mark">!</span>
+            <span>This changes what the reader <em>extracts</em>, not what is true. A screenshot can be
+              edited in seconds and models misread digits, so never let the assistant confirm a payment
+              on this alone — check it against your payment provider or invoice record.</span>
+          </div>
+          <div class="btn-row">
+            <button class="btn btn-ghost">Save guidance</button>
+          </div>
+        </form>
         <div class="section-title">Recent activity</div>
         ${events.length === 0
           ? `<p class="empty">No events yet — activity will appear here once a contact sends an attachment.</p>`
@@ -563,6 +583,19 @@ export function createPortalRouter(ctx: PortalCtx): Router {
     } catch (err) {
       ctx.events.record(t.id, "error", `tool retry failed: ${err instanceof Error ? err.message : "unknown"}`);
     }
+    res.redirect(`/dashboard/${t.token}`);
+  });
+
+  router.post("/dashboard/:token/instruction", (req, res) => {
+    const t = ctx.tenants.getByToken(req.params.token);
+    if (!t) { res.status(404).end(); return; }
+    const text = (req.body as { instruction?: string }).instruction ?? "";
+    ctx.tenants.setAnalysisInstruction(t.id, text);
+    const clean = text.trim();
+    ctx.events.record(
+      t.id, "config",
+      clean ? `analysis guidance set (${Math.min(clean.length, MAX_ANALYSIS_INSTRUCTION)} chars)` : "analysis guidance cleared"
+    );
     res.redirect(`/dashboard/${t.token}`);
   });
 
