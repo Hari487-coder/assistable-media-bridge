@@ -113,6 +113,26 @@ export async function provisionTenant(deps: ProvisionDeps, input: TenantInput) {
     );
   }
 
+  // Coherence check — the three credentials can each be individually valid
+  // while belonging to DIFFERENT subaccounts. Seen live: a workspace v3 key
+  // with the Subaccount ID field left blank self-resolved to an empty
+  // subaccount → every waker poll saw 0 conversations and tool provisioning
+  // targeted the wrong tenant, with zero errors anywhere. The assistant is
+  // the anchor: it must be visible to this key.
+  let assistants: Array<{ id: string; name: string }>;
+  try {
+    assistants = await v3.listAssistants();
+  } catch (err) {
+    throw new Error(
+      `could not list assistants with this v3 key${err instanceof Error ? ` — ${err.message}` : ""}`
+    );
+  }
+  if (!assistants.some((a) => a.id === input.assistantId)) {
+    throw new Error(
+      `assistant ${input.assistantId} is not visible to this v3 API key — the key resolves to a different subaccount. Mint the API key inside the SAME subaccount as the assistant (Dashboard → Integrations → API Key), or if you use a workspace-wide key, fill in the Subaccount ID field.`
+    );
+  }
+
   // 2. Persist the tenant (secrets encrypted at rest).
   const tenant: Tenant = deps.tenants.create(input);
 

@@ -65,6 +65,15 @@ describe("provisionTenant", () => {
     const { ctx } = deps(undefined, { ghlFactory: () => ({ validatePit: async () => false }) });
     await expect(provisionTenant(ctx as never, input)).rejects.toThrow(/GHL/i);
   });
+  it("rejects a v3 key whose subaccount cannot see the chosen assistant", async () => {
+    // Each credential can be individually valid while resolving to a different
+    // subaccount (live case: workspace key + blank Subaccount ID). No tenant
+    // row may be created from an incoherent trio.
+    const v3 = makeV3({ listAssistants: async () => [{ id: "OTHER", name: "Elsewhere" }] });
+    const { ctx } = deps(v3);
+    await expect(provisionTenant(ctx as never, input)).rejects.toThrow(/different subaccount/i);
+    expect(v3.calls.createdName).toBe(""); // never reached tool creation
+  });
   it("reuses an existing tool on 409 conflict, repoints its URL, then assigns it", async () => {
     const v3 = makeV3({ createTool: async () => ({ id: null, conflict: true as const, raw: {} }) });
     const { ctx } = deps(v3);
