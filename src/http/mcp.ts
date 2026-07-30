@@ -5,10 +5,12 @@ import { z } from "zod";
 import { downloadMedia } from "../media/download";
 import { sniff } from "../media/sniff";
 import type { MediaProvider } from "../providers";
+import type { EventStore } from "../store/events";
 import type { Tenant, TenantStore } from "../store/tenants";
 
 export interface McpRouterCtx {
   tenants: TenantStore;
+  events: EventStore;
   providerFactory: (tenant: Tenant) => MediaProvider;
   mediaFetch?: typeof fetch;
 }
@@ -27,22 +29,35 @@ function buildServer(ctx: McpRouterCtx, tenant: Tenant): McpServer {
     if ("error" in dl) return { error: `download failed: ${dl.error}` };
     return { bytes: dl.bytes, sniffed: sniff(dl.bytes) };
   };
+  // Every MCP tool invocation records an event — success or failure — so the
+  // portal activity feed can tell "assistant never called the tool" apart
+  // from "tool was called and failed". Event-store errors must never break
+  // the LLM-safe response.
+  const record = (kind: string, detail: string) => {
+    try { ctx.events.record(tenant.id, kind, detail); } catch { /* non-fatal */ }
+  };
   const analyze = async (url: string, expectedKind?: "audio" | "image" | "pdf") => {
+    const fail = (msg: string) => {
+      record("error", `mcp: ${msg}`);
+      return errText(msg);
+    };
     const r = await fetchAndSniff(url);
-    if ("error" in r) return errText(r.error);
-    if (r.sniffed.kind === "unknown") return errText("unsupported media type");
+    if ("error" in r) return fail(r.error);
+    if (r.sniffed.kind === "unknown") return fail("unsupported media type");
     if (expectedKind && r.sniffed.kind !== expectedKind)
-      return errText(`expected ${expectedKind}, got ${r.sniffed.kind}`);
+      return fail(`expected ${expectedKind}, got ${r.sniffed.kind}`);
     // Honor the same per-tenant modality kill switches as the tool/waker path
     // (analyze.ts) — a disabled modality must not process on any door.
     if (r.sniffed.kind === "audio" && !tenant.modalities.audio)
-      return errText("[audio processing is disabled for this account]");
+      return fail("[audio processing is disabled for this account]");
     if (r.sniffed.kind === "image" && !tenant.modalities.image)
-      return errText("[image processing is disabled for this account]");
+      return fail("[image processing is disabled for this account]");
     try {
-      return text(await provider.describe({ kind: r.sniffed.kind, mime: r.sniffed.mime, bytes: r.bytes }));
+      const described = await provider.describe({ kind: r.sniffed.kind, mime: r.sniffed.mime, bytes: r.bytes });
+      record("mcp_call", `kind=${r.sniffed.kind}`);
+      return text(described);
     } catch (err) {
-      return errText(err instanceof Error ? err.message : "provider error");
+      return fail(err instanceof Error ? err.message : "provider error");
     }
   };
 

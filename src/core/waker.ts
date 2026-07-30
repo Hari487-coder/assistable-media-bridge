@@ -6,7 +6,7 @@ import type { Tenant } from "../store/tenants";
 export type WakerState = Map<string, string>;
 
 export interface WakerDeps {
-  v3: Pick<V3Client, "listConversations" | "listMessages" | "chatCompletion">;
+  v3: Pick<V3Client, "listConversations" | "listMessages" | "chatCompletion" | "assignTool">;
   processed: ProcessedStore;
   events: EventStore;
   state: WakerState;
@@ -26,6 +26,36 @@ export const WAKE_INSTRUCTION =
 
 const isMediaOnly = (m: { content: string | null; ai: boolean; source: string }) =>
   m.source === "USER" && m.ai === false && (!m.content || m.content.trim() === "");
+
+// Provisioning attaches analyze_attachment to the ONE assistant chosen at
+// onboarding, but wakes go to the conversation's pinned assistant — on a
+// multi-assistant account that assistant has no tool to call and the wake
+// instruction produces a generic guess-reply. Ensure the tool is attached to
+// whichever assistant we are about to wake. Idempotent (m2m connect), cached
+// via the processed store so it costs one API call per assistant, re-verified
+// after each prune window. An assign failure never blocks the wake — the
+// error event is the diagnostic.
+async function ensureToolAssigned(
+  deps: WakerDeps, tenant: Tenant, assistantId: string
+): Promise<void> {
+  if (!tenant.toolId) return;
+  const key = `assigned:${assistantId}`;
+  if (deps.processed.has(tenant.id, key)) return;
+  try {
+    const r = await deps.v3.assignTool(tenant.toolId, assistantId);
+    if (r.ok) {
+      deps.processed.add(tenant.id, key);
+      deps.events.record(tenant.id, "assign", `tool=${tenant.toolId} assistant=${assistantId}`);
+    } else {
+      deps.events.record(tenant.id, "error", `assign failed assistant=${assistantId}: ${r.error}`);
+    }
+  } catch (err) {
+    deps.events.record(
+      tenant.id, "error",
+      `assign failed assistant=${assistantId}: ${err instanceof Error ? err.message : "unknown"}`
+    );
+  }
+}
 
 export async function runWakerCycle(deps: WakerDeps, tenant: Tenant): Promise<{ woken: number }> {
   const conversations = await deps.v3.listConversations(WAKER_CONV_LIMIT);
@@ -59,6 +89,7 @@ export async function runWakerCycle(deps: WakerDeps, tenant: Tenant): Promise<{ 
       if (fresh.length > 0) {
         deps.events.record(tenant.id, "detect", `conv=${conv.id} mediaOnly=${fresh.length}`);
         const assistantId = conv.assistant?.id ?? tenant.assistantId;
+        await ensureToolAssigned(deps, tenant, assistantId);
         const r = await deps.v3.chatCompletion({
           assistantId, conversationId: conv.id, additionalInstructions: WAKE_INSTRUCTION,
         });

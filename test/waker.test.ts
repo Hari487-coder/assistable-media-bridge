@@ -16,9 +16,14 @@ const msg = (id: string, over: Partial<{ content: string | null; ai: boolean; so
   id, content: null, ai: false, source: "USER", channel: "whatsapp", createdAt: "t", ...over,
 });
 
-function make(convUpdatedAt: string, messages: ReturnType<typeof msg>[]) {
+function make(
+  convUpdatedAt: string,
+  messages: ReturnType<typeof msg>[],
+  opts: { assignOk?: boolean } = {}
+) {
   const db = openDb(":memory:");
   const wakes: Array<{ assistantId: string; conversationId: string; additionalInstructions: string }> = [];
+  const assigns: Array<{ toolId: string; assistantId: string }> = [];
   const deps = {
     v3: {
       listConversations: async () => [
@@ -26,12 +31,18 @@ function make(convUpdatedAt: string, messages: ReturnType<typeof msg>[]) {
       ],
       listMessages: async () => messages,
       chatCompletion: async (a: typeof wakes[number]) => { wakes.push(a); return { ok: true as const }; },
+      assignTool: async (toolId: string, assistantId: string) => {
+        assigns.push({ toolId, assistantId });
+        return opts.assignOk === false
+          ? { ok: false as const, error: "v3 assignTool HTTP 404" }
+          : { ok: true as const };
+      },
     },
     processed: createProcessedStore(db),
     events: createEventStore(db),
     state: new Map<string, string>(),
   };
-  return { deps, wakes };
+  return { deps, wakes, assigns };
 }
 
 describe("runWakerCycle", () => {
@@ -51,6 +62,45 @@ describe("runWakerCycle", () => {
     expect(wakes[0].additionalInstructions).toMatch(/^\[media-mcp\]/);
     expect(wakes[0].additionalInstructions).toContain("analyze_attachment");
   });
+  it("assigns the tool to the conversation assistant before waking, once", async () => {
+    const withTool = { ...tenant, toolId: "tool-1" } as Tenant;
+    const msgs = [msg("m1")];
+    const { deps, wakes, assigns } = make("2026-07-23T10:00:00Z", msgs);
+    deps.state.set("t1", "2026-07-23T09:00:00Z");
+    await runWakerCycle(deps as never, withTool);
+    expect(assigns).toEqual([{ toolId: "tool-1", assistantId: "A_conv" }]);
+    expect(wakes).toHaveLength(1);
+    expect(deps.events.latest("t1", 10).some((e) => e.kind === "assign")).toBe(true);
+
+    // A later wake for the same assistant must not re-assign (cached).
+    msgs.push(msg("m2"));
+    deps.state.set("t1", "2026-07-23T09:00:00Z");
+    await runWakerCycle(deps as never, withTool);
+    expect(wakes).toHaveLength(2);
+    expect(assigns).toHaveLength(1);
+  });
+
+  it("an assign failure records an error but the wake still fires", async () => {
+    const withTool = { ...tenant, toolId: "tool-1" } as Tenant;
+    const { deps, wakes, assigns } = make("2026-07-23T10:00:00Z", [msg("m1")], { assignOk: false });
+    deps.state.set("t1", "2026-07-23T09:00:00Z");
+    const r = await runWakerCycle(deps as never, withTool);
+    expect(assigns).toHaveLength(1);
+    expect(r.woken).toBe(1);
+    expect(wakes).toHaveLength(1);
+    expect(deps.events.latest("t1", 10).some(
+      (e) => e.kind === "error" && e.detail.includes("assign failed")
+    )).toBe(true);
+  });
+
+  it("skips assignment entirely when the tenant has no toolId", async () => {
+    const { deps, wakes, assigns } = make("2026-07-23T10:00:00Z", [msg("m1")]);
+    deps.state.set("t1", "2026-07-23T09:00:00Z");
+    await runWakerCycle(deps as never, tenant); // toolId: null
+    expect(assigns).toHaveLength(0);
+    expect(wakes).toHaveLength(1);
+  });
+
   it("ignores non-matching messages and already-woken ids", async () => {
     const { deps, wakes } = make("2026-07-23T10:00:00Z", [
       msg("m1", { content: "hello" }),          // has text

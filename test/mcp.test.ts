@@ -2,6 +2,7 @@ import express from "express";
 import request from "supertest";
 import { describe, expect, it } from "vitest";
 import { openDb } from "../src/db";
+import { createEventStore } from "../src/store/events";
 import { createTenantStore } from "../src/store/tenants";
 import { createMcpRouter } from "../src/http/mcp";
 
@@ -14,14 +15,16 @@ function makeApp() {
     label: "T", locationId: "L1", assistantId: "A1", provider: "gemini",
     v3Key: "v", ghlPit: "p", aiKey: "k",
   });
+  const events = createEventStore(db);
   const app = express();
   app.use(express.json());
   app.use(createMcpRouter({
     tenants,
+    events,
     providerFactory: () => ({ describe: async () => "transcript!", validateKey: async () => ({ ok: true as const }) }),
     mediaFetch: (async () => new Response(oggBytes)) as unknown as typeof fetch,
   }));
-  return { app, token: t.token, tenants };
+  return { app, token: t.token, tenants, events };
 }
 
 const rpc = (method: string, params: unknown, id = 1) => ({ jsonrpc: "2.0", id, method, params });
@@ -39,8 +42,8 @@ describe("mcp endpoint", () => {
     expect(names).toContain("transcribe_audio");
     expect(names).toContain("status");
   });
-  it("calls analyze_attachment end to end", async () => {
-    const { app, token } = makeApp();
+  it("calls analyze_attachment end to end and records an mcp_call event", async () => {
+    const { app, token, tenants, events } = makeApp();
     const res = await request(app)
       .post(`/mcp/${token}`)
       .set("Accept", "application/json, text/event-stream")
@@ -50,6 +53,8 @@ describe("mcp endpoint", () => {
       }));
     expect(res.status).toBe(200);
     expect(res.body.result.content[0].text).toContain("transcript!");
+    const t = tenants.getByToken(token)!;
+    expect(events.latest(t.id, 10).some((e) => e.kind === "mcp_call" && e.detail.includes("audio"))).toBe(true);
   });
   it("rejects unknown token", async () => {
     const { app } = makeApp();
@@ -70,8 +75,8 @@ describe("mcp endpoint", () => {
     expect(res.body.result.isError).toBe(true);
     expect(res.body.result.content[0].text).toMatch(/expected image/i);
   });
-  it("a download failure returns isError, transport stays alive", async () => {
-    const { app, token } = makeApp();
+  it("a download failure returns isError, transport stays alive, and records an error event", async () => {
+    const { app, token, tenants, events } = makeApp();
     const res = await request(app)
       .post(`/mcp/${token}`)
       .set("Accept", "application/json, text/event-stream")
@@ -79,6 +84,8 @@ describe("mcp endpoint", () => {
     expect(res.status).toBe(200);
     expect(res.body.result.isError).toBe(true);
     expect(res.body.result.content[0].text).toMatch(/download failed|disallowed/i);
+    const t = tenants.getByToken(token)!;
+    expect(events.latest(t.id, 10).some((e) => e.kind === "error" && e.detail.startsWith("mcp:"))).toBe(true);
   });
   it("disabled tenant token → 401", async () => {
     const { app, token, tenants } = makeApp();

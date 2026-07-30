@@ -25,6 +25,10 @@ export async function analyzeForContact(
   });
   const fresh = messages.filter((m) => !deps.processed.has(tenant.id, m.id));
   if (fresh.length === 0) {
+    deps.events.record(
+      tenant.id, "tool_skip",
+      `contact=${contactId} no new attachments (ghl returned ${messages.length} media messages)`
+    );
     return { text: "[no new attachments found]", processedIds: [] };
   }
 

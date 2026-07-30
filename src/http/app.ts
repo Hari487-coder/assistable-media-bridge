@@ -39,7 +39,7 @@ export function buildApp(config: AppConfig) {
     tenants, processed, events,
     ghlFactory: ghlFor, providerFactory: providerFor, mediaFetch,
   }));
-  app.use(createMcpRouter({ tenants, providerFactory: providerFor, mediaFetch }));
+  app.use(createMcpRouter({ tenants, events, providerFactory: providerFor, mediaFetch }));
   app.use(createPortalRouter({
     tenants, events, publicBaseUrl: config.publicBaseUrl,
     v3Factory: (key, subAccountId) => v3For(key, subAccountId),

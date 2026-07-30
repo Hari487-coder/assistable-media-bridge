@@ -45,11 +45,13 @@ export function createToolRouter(ctx: ToolRouterCtx): Router {
         return;
       }
       if (!tenant.enabled) {
+        ctx.events.record(tenant.id, "tool_skip", "tool called while bridge disabled");
         res.json({ result: "[media reader is disabled]" });
         return;
       }
       const { contactId } = readContext((req.body ?? {}) as Record<string, unknown>);
       if (!contactId) {
+        ctx.events.record(tenant.id, "tool_skip", "no contact context in tool call envelope");
         res.json({ result: "[no contact context supplied]" });
         return;
       }
