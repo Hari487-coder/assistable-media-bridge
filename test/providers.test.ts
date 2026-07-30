@@ -24,6 +24,58 @@ describe("gemini adapter", () => {
     const body = JSON.parse(String(calls[0].init.body));
     expect(body.contents[0].parts[0].inline_data.mime_type).toBe("audio/ogg");
   });
+  it("self-heals a retired model: 404 → discover via /models → retry → cache", async () => {
+    const calls: string[] = [];
+    const impl = (async (url: string) => {
+      calls.push(String(url));
+      if (String(url).includes(":generateContent")) {
+        if (String(url).includes("gemini-flash-latest")) return new Response("{}", { status: 404 });
+        return new Response(JSON.stringify({
+          candidates: [{ content: { parts: [{ text: "healed" }] } }],
+        }), { status: 200 });
+      }
+      // /models discovery listing
+      return new Response(JSON.stringify({ models: [
+        { name: "models/gemini-3.5-flash", supportedGenerationMethods: ["generateContent"] },
+        { name: "models/gemini-3.1-flash-lite", supportedGenerationMethods: ["generateContent"] },
+        { name: "models/gemini-4-flash-preview", supportedGenerationMethods: ["generateContent"] },
+        { name: "models/gemini-3.5-pro", supportedGenerationMethods: ["generateContent"] },
+        { name: "models/embedding-001", supportedGenerationMethods: ["embedContent"] },
+      ] }), { status: 200 });
+    }) as unknown as typeof fetch;
+    const p = getProvider("gemini", "HEAL_KEY_1", impl);
+    const out = await p.describe({ kind: "image", mime: "image/jpeg", bytes: new Uint8Array([1]) });
+    expect(out).toBe("healed");
+    // Sequence: default model 404 → /models → stable newest flash (not -lite is
+    // not required, but preview/exp must lose to stable; 3.5-flash sorts last).
+    expect(calls[0]).toContain("gemini-flash-latest:generateContent");
+    expect(calls[1]).toContain("/v1beta/models?");
+    expect(calls[2]).toContain("gemini-3.5-flash:generateContent");
+    // Cached: a second call goes straight to the resolved model, no rediscovery.
+    await p.describe({ kind: "image", mime: "image/jpeg", bytes: new Uint8Array([1]) });
+    expect(calls[3]).toContain("gemini-3.5-flash:generateContent");
+    expect(calls).toHaveLength(4);
+  });
+  it("a 404 with no flash model available surfaces the original error", async () => {
+    const impl = (async (url: string) => {
+      if (String(url).includes(":generateContent")) return new Response("{}", { status: 404 });
+      return new Response(JSON.stringify({ models: [] }), { status: 200 });
+    }) as unknown as typeof fetch;
+    const p = getProvider("gemini", "HEAL_KEY_2", impl);
+    await expect(p.describe({ kind: "audio", mime: "audio/ogg", bytes: new Uint8Array([1]) }))
+      .rejects.toThrow(/^gemini 404$/);
+  });
+  it("non-404 provider errors do not trigger model discovery", async () => {
+    const calls: string[] = [];
+    const impl = (async (url: string) => {
+      calls.push(String(url));
+      return new Response("{}", { status: 429 });
+    }) as unknown as typeof fetch;
+    const p = getProvider("gemini", "HEAL_KEY_3", impl);
+    await expect(p.describe({ kind: "audio", mime: "audio/ogg", bytes: new Uint8Array([1]) }))
+      .rejects.toThrow(/^gemini 429$/);
+    expect(calls).toHaveLength(1);
+  });
   it("sends images as inline_data with the OCR prompt", async () => {
     const { impl, calls } = capture({
       candidates: [{ content: { parts: [{ text: "a red card on a wooden table" }] } }],
