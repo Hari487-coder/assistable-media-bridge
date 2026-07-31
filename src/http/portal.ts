@@ -1,5 +1,6 @@
 import { Router } from "express";
 import { parseBatchRows, provisionBatch, redactPits } from "../core/batch";
+import { mapLimit } from "../core/concurrency";
 import { PROMPT_SNIPPET, type ProvisionDeps, ensureTool, provisionTenant } from "../core/provision";
 import type { EventStore } from "../store/events";
 import { MAX_ANALYSIS_INSTRUCTION } from "../store/tenants";
@@ -576,7 +577,16 @@ export function createPortalRouter(ctx: PortalCtx): Router {
           <small>Tool: ${t.toolId ? `analyze_attachment (${esc(t.toolId)})` : "not yet created"}</small>
           <small><code>${esc(ctx.publicBaseUrl)}/mcp/${t.token}</code></small>
         </footer>
-        ${t.toolId ? "" : `
+        ${t.toolId ? `
+        <form method="post" action="/dashboard/${t.token}/assign-all">
+          <div class="btn-row">
+            <button class="btn btn-ghost">Attach tool to all assistants</button>
+          </div>
+        </form>
+        <p class="lede" style="margin:10px 0 0;font-size:13px">The tool is attached to an assistant the
+          first time that assistant receives an attachment, so a subaccount with several assistants fills
+          in as they are used. Press this to attach it to all of them now, so any assistant can read
+          attachments before it has ever been sent one.</p>` : `
         <form method="post" action="/dashboard/${t.token}/retry-tool">
           <div class="btn-row">
             <button class="btn btn-primary">Retry tool setup</button>
@@ -603,6 +613,56 @@ export function createPortalRouter(ctx: PortalCtx): Router {
       }
     } catch (err) {
       ctx.events.record(t.id, "error", `tool retry failed: ${err instanceof Error ? err.message : "unknown"}`);
+    }
+    res.redirect(`/dashboard/${t.token}`);
+  });
+
+  // Attach the tool to EVERY assistant in the subaccount.
+  //
+  // Assignment is otherwise lazy: the waker attaches the tool to whichever
+  // assistant it is about to wake, so an assistant that has never received an
+  // attachment cannot call analyze_attachment yet. A contact asking "did you see
+  // the photo I sent?" in plain text lands on that assistant with no tool.
+  //
+  // Lazy stays the default deliberately — a voice-only or sales assistant should
+  // not silently gain the ability to read attachments because someone onboarded a
+  // location. So this is a button the operator presses, not something onboarding
+  // does behind their back.
+  router.post("/dashboard/:token/assign-all", async (req, res) => {
+    const t = ctx.tenants.getByToken(req.params.token);
+    if (!t) { res.status(404).end(); return; }
+    const toolId = t.toolId;
+    if (!toolId) {
+      ctx.events.record(
+        t.id, "error",
+        "attach-to-all skipped: the tool does not exist yet — use Retry tool setup first"
+      );
+      res.redirect(`/dashboard/${t.token}`);
+      return;
+    }
+    try {
+      const v3 = ctx.v3Factory(t.v3Key, t.subAccountId);
+      const assistants = await v3.listAssistants();
+      const results = await mapLimit(assistants, 4, async (a) => {
+        try {
+          const r = await v3.assignTool(toolId, a.id);
+          return r.ok ? { id: a.id, ok: true } : { id: a.id, ok: false, error: r.error };
+        } catch (err) {
+          return { id: a.id, ok: false, error: err instanceof Error ? err.message : "unknown" };
+        }
+      });
+      const failed = results.filter((r) => !r.ok);
+      ctx.events.record(
+        t.id, failed.length ? "error" : "assign",
+        `tool attached to ${results.length - failed.length}/${results.length} assistants` +
+        (failed.length ? ` — failed: ${failed.map((f) => `${f.id} (${f.error})`).join("; ")}` : "")
+      );
+    } catch (err) {
+      // One assistant failing is recorded above; this is the whole call dying.
+      ctx.events.record(
+        t.id, "error",
+        `attach-to-all failed: ${err instanceof Error ? err.message : "unknown"}`
+      );
     }
     res.redirect(`/dashboard/${t.token}`);
   });

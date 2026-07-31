@@ -156,6 +156,33 @@ the AI provider twice.
 Each connected subaccount still gets its own dashboard, kill switches and
 `analyze_attachment` tool; the prompt snippet must be added to every assistant.
 
+### Subaccounts running several assistants
+
+**One row per location, regardless of how many assistants it runs.** A second
+row for the same location does not create a second connection — it reconnects
+and replaces the first.
+
+It is not needed anyway. Wakes go to the conversation's *own* assistant, not the
+tenant's, and the tool is attached to that assistant on the way past:
+
+```
+const assistantId = conv.assistant?.id ?? tenant.assistantId;
+await ensureToolAssigned(deps, tenant, assistantId);
+```
+
+The `assistantId` in a row is only the fallback for conversations with no
+assistant of their own.
+
+That attachment is lazy — an assistant gets the tool the first time it receives
+an attachment. So an assistant that has never been sent one cannot yet answer
+"did you see the photo I sent?" asked as plain text. Lazy is the default on
+purpose: a voice-only or sales assistant should not silently gain the ability to
+read attachments because someone onboarded a location.
+
+**Attach tool to all assistants** on the dashboard closes that gap on demand,
+attaching it to every assistant in the subaccount in one press and recording the
+per-assistant outcome in the activity feed.
+
 ## Spike Runbook (Testing Integration)
 
 The `npm run spike` CLI tests the full detect→fetch→wake→tool-listen flow.

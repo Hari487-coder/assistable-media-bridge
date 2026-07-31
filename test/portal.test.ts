@@ -6,26 +6,39 @@ import { createEventStore } from "../src/store/events";
 import { createTenantStore } from "../src/store/tenants";
 import { createPortalRouter } from "../src/http/portal";
 
-function makeApp() {
+function makeApp(opts: {
+  assistants?: Array<{ id: string; name: string }>;
+  assignFails?: string[];
+  listAssistantsThrows?: boolean;
+} = {}) {
   const db = openDb(":memory:");
   const tenants = createTenantStore(db, Buffer.alloc(32, 3));
   const events = createEventStore(db);
+  const assigns: Array<{ toolId: string; assistantId: string }> = [];
   const app = express();
   app.use(express.urlencoded({ extended: false }));
   app.use(createPortalRouter({
     tenants, events, publicBaseUrl: "https://media.example.com",
     v3Factory: () => ({
       validateKey: async () => ({ ok: true }),
-      listAssistants: async () => [{ id: "A1", name: "Bot" }],
+      listAssistants: async () => {
+        if (opts.listAssistantsThrows) throw new Error("v3 listAssistants HTTP 500");
+        return opts.assistants ?? [{ id: "A1", name: "Bot" }];
+      },
       createTool: async () => ({ id: "tool_1", conflict: false, raw: {} }),
       findToolByName: async () => "tool_1",
-      assignTool: async () => ({ ok: true }),
+      assignTool: async (toolId: string, assistantId: string) => {
+        assigns.push({ toolId, assistantId });
+        return (opts.assignFails ?? []).includes(assistantId)
+          ? { ok: false, error: "v3 assignTool HTTP 403" }
+          : { ok: true };
+      },
       updateToolUrl: async () => ({ ok: true }),
     }) as never,
     ghlFactory: () => ({ validatePit: async () => true }) as never,
     providerFactory: () => ({ validateKey: async () => ({ ok: true as const }), describe: async () => "" }),
   }));
-  return { app, tenants, events };
+  return { app, tenants, events, assigns };
 }
 
 describe("portal", () => {
@@ -184,5 +197,97 @@ describe("portal", () => {
     expect(res.status).toBe(200);
     expect(res.text).not.toContain("<script>alert(1)</script>");
     expect(res.text).toContain("&lt;/title&gt;&lt;script&gt;alert(1)&lt;/script&gt;");
+  });
+});
+
+describe("attach tool to all assistants", () => {
+  const connect = async (app: import("express").Express) =>
+    request(app).post("/setup").type("form").send({
+      label: "Multi", locationId: "L1", assistantId: "A1",
+      provider: "gemini", v3Key: "v", ghlPit: "p", aiKey: "k",
+    });
+
+  it("attaches to every assistant in the subaccount", async () => {
+    // A subaccount running several assistants: the waker only attaches the tool
+    // to one as it wakes it, so an assistant that has never been sent an
+    // attachment cannot read one on request until this runs.
+    const { app, tenants, events, assigns } = makeApp({
+      assistants: [{ id: "A1", name: "Support" }, { id: "A2", name: "Sales" }, { id: "A3", name: "Voice" }],
+    });
+    await connect(app);
+    const t = tenants.getByLocationId("L1");
+    assigns.length = 0; // ignore the one assignment onboarding already made
+
+    const res = await request(app).post(`/dashboard/${t?.token}/assign-all`);
+    expect(res.status).toBe(302);
+    expect(assigns.map((a) => a.assistantId).sort()).toEqual(["A1", "A2", "A3"]);
+    expect(assigns.every((a) => a.toolId === "tool_1")).toBe(true);
+    expect(events.latest(t!.id, 5).some(
+      (e) => e.kind === "assign" && e.detail.includes("3/3 assistants")
+    )).toBe(true);
+  });
+
+  it("records which assistants failed without losing the ones that worked", async () => {
+    const { app, tenants, events } = makeApp({
+      assistants: [{ id: "A1", name: "Support" }, { id: "A2", name: "Sales" }],
+      assignFails: ["A2"],
+    });
+    await connect(app);
+    const t = tenants.getByLocationId("L1");
+
+    await request(app).post(`/dashboard/${t?.token}/assign-all`);
+    const latest = events.latest(t!.id, 5)[0];
+    expect(latest.kind).toBe("error");
+    expect(latest.detail).toContain("1/2 assistants");
+    expect(latest.detail).toContain("A2");
+  });
+
+  it("survives the assistant lookup failing entirely", async () => {
+    // Mutable so onboarding can succeed and only the later lookup breaks —
+    // which is the real shape of a mid-session v3 outage.
+    const control = { listAssistantsThrows: false };
+    const { app, tenants, events } = makeApp(control);
+    await connect(app);
+    const t = tenants.getByLocationId("L1");
+
+    control.listAssistantsThrows = true;
+    const res = await request(app).post(`/dashboard/${t?.token}/assign-all`);
+    expect(res.status).toBe(302); // never a 500 in the operator's face
+    const latest = events.latest(t!.id, 5)[0];
+    expect(latest.kind).toBe("error");
+    expect(latest.detail).toContain("attach-to-all failed");
+    expect(latest.detail).toContain("HTTP 500");
+  });
+
+  it("refuses when the tool does not exist yet and says what to do", async () => {
+    const { app, tenants, events } = makeApp();
+    const t = tenants.create({
+      label: "V", locationId: "L2", assistantId: "A1",
+      provider: "gemini", v3Key: "v", ghlPit: "p", aiKey: "k",
+    }); // toolId is null
+    const res = await request(app).post(`/dashboard/${t.token}/assign-all`);
+    expect(res.status).toBe(302);
+    expect(events.latest(t.id, 5)[0].detail).toMatch(/Retry tool setup/);
+  });
+
+  it("shows the button only once a tool exists", async () => {
+    const { app, tenants } = makeApp();
+    const noTool = tenants.create({
+      label: "V", locationId: "L3", assistantId: "A1",
+      provider: "gemini", v3Key: "v", ghlPit: "p", aiKey: "k",
+    });
+    const before = await request(app).get(`/dashboard/${noTool.token}`);
+    expect(before.text).not.toContain("Attach tool to all assistants");
+    expect(before.text).toContain("Retry tool setup");
+
+    await connect(app);
+    const withTool = tenants.getByLocationId("L1");
+    const after = await request(app).get(`/dashboard/${withTool?.token}`);
+    expect(after.text).toContain("Attach tool to all assistants");
+  });
+
+  it("assign-all on an unknown token 404s", async () => {
+    const { app } = makeApp();
+    expect((await request(app).post("/dashboard/nope/assign-all")).status).toBe(404);
   });
 });
