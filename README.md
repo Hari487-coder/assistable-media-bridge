@@ -202,6 +202,43 @@ All toggles live on the dashboard (`/dashboard/:token`):
 - **Waker on/off** — turn automatic wake-on-detect on/off (tool endpoint still works)
 - **Voice notes on/off** — silence audio analysis
 - **Images on/off** — silence image analysis
+- **Reactions on/off** — stop waking the assistant for bare emoji reactions
+
+## Emoji and Reactions
+
+Emoji inside a normal message (`👍 thanks, see you Friday`) always reached the
+assistant — the body is non-empty, so nothing drops it.
+
+A **reaction** is different. Tapping 👍 on a message sends no body, and the
+platform drops every body-less inbound before the AI (`enrich.worker.ts`, whose
+own log names the cases: "reaction / sticker / media-only / unsupported type").
+That is the same gap this bridge exists to close for media.
+
+The waker already detected these, but it sent the *attachment* wake instruction
+for them — so the assistant called `analyze_attachment`, got "no new
+attachments", and improvised. That is what a contact experiences as "the AI
+doesn't understand emojis".
+
+Body-less inbound messages are now split on the v3 `type` field:
+
+| `type` | Treated as | Wake instruction |
+| --- | --- | --- |
+| `IMAGE` / `AUDIO` / `FILE` / `VIDEO` | media | read it with the tool |
+| anything else (e.g. `TEXT`) | reaction | reply briefly, **do not** call the tool |
+| missing | media | unchanged from before |
+
+A burst containing both wakes as media — reading the attachment is strictly more
+useful and its instruction already covers replying.
+
+**Which `type` a real channel reaction arrives as is not documented**, so the
+`detect` event records the raw values (`reactions=1 types=TEXT`). The first live
+reaction tells you from the dashboard whether the split is landing correctly. If
+they arrive typed as media, they fall back to today's behaviour — no regression,
+but no improvement either, and the event will show it.
+
+> Reactions wake the assistant by default. A thumbs-up often just means the
+> conversation is finished, so if replies feel chatty, turn **Reactions** off on
+> the dashboard. Each reaction costs a model call.
 
 ## Telling the Reader What to Look For
 

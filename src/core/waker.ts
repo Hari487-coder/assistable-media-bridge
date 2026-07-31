@@ -40,8 +40,41 @@ export const WAKE_INSTRUCTION =
   "now to read them, then respond helpfully to the contact based on what the tool " +
   "returns. Do not mention any technical process or tools to the contact.";
 
-const isMediaOnly = (m: { content: string | null; ai: boolean; source: string }) =>
+// A reaction has nothing to read. Sending WAKE_INSTRUCTION for one told the
+// assistant an attachment had arrived, so it called analyze_attachment, got
+// "[no new attachments found]", and improvised — which is what a contact
+// experiences as "the AI doesn't understand emojis". The instruction has to
+// match reality, and has to say NOT to call the tool or the wasted call and
+// confused reply both come back.
+export const REACTION_WAKE_INSTRUCTION =
+  "[media-mcp] The contact reacted to your last message (for example a thumbs-up, " +
+  "heart, or similar emoji) without sending any text. There is nothing to read, so " +
+  "do NOT call the analyze_attachment tool. Reply briefly and naturally, matching " +
+  "the tone of the reaction, and only if a reply genuinely adds something — a " +
+  "reaction is often just an acknowledgement that the conversation is finished. " +
+  "Keep it to one short sentence at most. Do not mention any technical process or " +
+  "tools to the contact.";
+
+/** Inbound, from the contact, with no text — media-only OR a reaction. */
+const isEmptyInbound = (m: { content: string | null; ai: boolean; source: string }) =>
   m.source === "USER" && m.ai === false && (!m.content || m.content.trim() === "");
+
+// v3 MessageType values that carry something the tool can actually read.
+const MEDIA_TYPES = new Set(["IMAGE", "AUDIO", "FILE", "VIDEO"]);
+
+/**
+ * Split a body-less inbound message into "there is media to read" vs "the
+ * contact reacted".
+ *
+ * When `type` is absent we assume media, because that is exactly what every
+ * such message was treated as before this existed — an unknown type must not
+ * silently turn a working voice-note wake into a reaction wake that tells the
+ * assistant not to call the tool.
+ */
+export function classifyEmptyInbound(m: { type?: string | null }): "media" | "reaction" {
+  if (!m.type) return "media";
+  return MEDIA_TYPES.has(m.type.toUpperCase()) ? "media" : "reaction";
+}
 
 // Provisioning attaches analyze_attachment to the ONE assistant chosen at
 // onboarding, but wakes go to the conversation's pinned assistant — on a
@@ -124,15 +157,41 @@ export async function runWakerCycle(deps: WakerDeps, tenant: Tenant): Promise<{ 
     }
     try {
       const messages = await deps.v3.listMessages(conv.id);
-      const fresh = messages.filter(
-        (m) => isMediaOnly(m) && !deps.processed.has(tenant.id, `waker:${m.id}`)
+      const all = messages.filter(
+        (m) => isEmptyInbound(m) && !deps.processed.has(tenant.id, `waker:${m.id}`)
       );
+      // A burst can mix both (a photo then a thumbs-up). Media wins: reading the
+      // attachment is strictly more useful, and its instruction already covers
+      // responding to the contact.
+      const hasMedia = all.some((m) => classifyEmptyInbound(m) === "media");
+      const reactionsOnly = all.length > 0 && !hasMedia;
+      // Kill switch, same as the audio/image ones. Reactions still get marked
+      // processed so a disabled tenant does not re-detect them forever.
+      if (reactionsOnly && !tenant.modalities.reactions) {
+        for (const m of all) deps.processed.add(tenant.id, `waker:${m.id}`);
+        deps.events.record(tenant.id, "detect", `conv=${conv.id} reactions=${all.length} (skipped — reactions off)`);
+      }
+      const fresh = reactionsOnly && !tenant.modalities.reactions ? [] : all;
       if (fresh.length > 0) {
-        deps.events.record(tenant.id, "detect", `conv=${conv.id} mediaOnly=${fresh.length}`);
+        // Record the raw v3 `type` values alongside the verdict. Which type a
+        // real channel reaction actually arrives as is not documented anywhere,
+        // and this is the branch that depends on it — so the first live one
+        // answers the question straight off the dashboard instead of needing a
+        // DB dig.
+        const types = [...new Set(fresh.map((m) => m.type ?? "none"))].join("/");
+        deps.events.record(
+          tenant.id, "detect",
+          reactionsOnly
+            ? `conv=${conv.id} reactions=${fresh.length} types=${types}`
+            : `conv=${conv.id} mediaOnly=${fresh.length} types=${types}`
+        );
         const assistantId = conv.assistant?.id ?? tenant.assistantId;
-        await ensureToolAssigned(deps, tenant, assistantId);
+        // A reaction wake explicitly tells the assistant NOT to call the tool,
+        // so there is nothing to attach — skip the assign round-trip.
+        if (!reactionsOnly) await ensureToolAssigned(deps, tenant, assistantId);
         const r = await deps.v3.chatCompletion({
-          assistantId, conversationId: conv.id, additionalInstructions: WAKE_INSTRUCTION,
+          assistantId, conversationId: conv.id,
+          additionalInstructions: reactionsOnly ? REACTION_WAKE_INSTRUCTION : WAKE_INSTRUCTION,
         });
         // Mark AFTER the attempt (not before): mark-before permanently loses
         // the wake if chatCompletion throws. On ok:false we still mark to

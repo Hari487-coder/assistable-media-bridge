@@ -149,6 +149,21 @@ describe("portal", () => {
     expect(page.text).not.toContain("<script>alert(1)</script>");
     expect(page.text).toContain("&lt;/textarea&gt;&lt;script&gt;");
   });
+  it("dashboard shows and toggles the reactions kill switch", async () => {
+    const { app, tenants } = makeApp();
+    const t = tenants.create({
+      label: "V", locationId: "L1", assistantId: "A1",
+      provider: "gemini", v3Key: "v", ghlPit: "p", aiKey: "k",
+    });
+    const before = await request(app).get(`/dashboard/${t.token}`);
+    expect(before.text).toContain("Turn reactions off"); // on by default
+
+    await request(app).post(`/dashboard/${t.token}/toggle`).type("form").send({ what: "reactions" });
+    expect(tenants.getByToken(t.token)?.modalities.reactions).toBe(false);
+
+    const after = await request(app).get(`/dashboard/${t.token}`);
+    expect(after.text).toContain("Turn reactions on");
+  });
   it("saving guidance on an unknown token 404s", async () => {
     const { app } = makeApp();
     const res = await request(app).post("/dashboard/nope/instruction").type("form").send({ instruction: "x" });

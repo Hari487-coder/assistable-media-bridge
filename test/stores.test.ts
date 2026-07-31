@@ -37,6 +37,25 @@ describe("tenant store", () => {
     tenants.setEnabled(t.id, false);
     expect(tenants.getByToken(t.token)?.enabled).toBe(false);
   });
+  it("treats reactions as on by default and toggles them", () => {
+    const { tenants } = mk();
+    const t = tenants.create(input);
+    expect(t.modalities.reactions).toBe(true);
+    tenants.setModality(t.id, "reactions", false);
+    expect(tenants.getByToken(t.token)?.modalities.reactions).toBe(false);
+    // The other modalities must be untouched by the shared column mapping.
+    expect(tenants.getByToken(t.token)?.modalities.audio).toBe(true);
+    expect(tenants.getByToken(t.token)?.modalities.image).toBe(true);
+  });
+  it("reads a pre-migration NULL reactions column as on", () => {
+    // ALTER TABLE cannot backfill a DEFAULT, so rows created before the column
+    // existed stay NULL. They must behave like a fresh install, not silently
+    // have reactions off.
+    const { tenants, db } = mk();
+    const t = tenants.create(input);
+    db.prepare("UPDATE tenants SET reactions_on = NULL WHERE id = ?").run(t.id);
+    expect(tenants.getByToken(t.token)?.modalities.reactions).toBe(true);
+  });
   it("rejects a second row for the same GHL location at the DB level", () => {
     const { tenants, db } = mk();
     tenants.create(input);

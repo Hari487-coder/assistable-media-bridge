@@ -14,6 +14,11 @@ export function openDb(path: string): Db {
       waker_enabled INTEGER NOT NULL DEFAULT 1,
       tool_id TEXT, enabled INTEGER NOT NULL DEFAULT 1,
       audio_on INTEGER NOT NULL DEFAULT 1, image_on INTEGER NOT NULL DEFAULT 1,
+      -- Nullable on purpose, unlike audio_on/image_on: ALTER TABLE cannot
+      -- backfill a DEFAULT, so upgraded instances carry NULL here forever. A
+      -- fresh install declaring NOT NULL would give the two a different schema
+      -- for the same column. The store reads NULL as "on" so both agree.
+      reactions_on INTEGER DEFAULT 1,
       sub_account_id TEXT, analysis_instruction TEXT,
       created_at INTEGER NOT NULL
     );
@@ -33,6 +38,11 @@ export function openDb(path: string): Db {
   for (const stmt of [
     "ALTER TABLE tenants ADD COLUMN sub_account_id TEXT",
     "ALTER TABLE tenants ADD COLUMN analysis_instruction TEXT",
+    // No DEFAULT: SQLite would refuse NOT NULL on an ALTER without one, and a
+    // plain nullable column keeps existing rows NULL. The store reads NULL as
+    // "on", so instances upgrading in place get reactions enabled, matching a
+    // fresh install's DEFAULT 1.
+    "ALTER TABLE tenants ADD COLUMN reactions_on INTEGER",
   ]) {
     try { db.exec(stmt); } catch { /* column already present */ }
   }

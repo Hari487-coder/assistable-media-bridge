@@ -83,9 +83,12 @@ export function createV3Client(opts: V3ClientOptions) {
     async listMessages(conversationId: string) {
       const r = await call("GET", `v3/conversations/${conversationId}/messages`);
       if (!r.ok) throw new Error(`v3 listMessages ${errDetail(r.status, r.json)}`);
+      // `type` is a MessageType (TEXT / IMAGE / AUDIO / FILE / VIDEO / ...).
+      // It is what separates "media arrived with no caption" from "the contact
+      // tapped a reaction" — both reach us with a null body.
       return items(unwrap(r.json)) as Array<{
         id: string; content: string | null; ai: boolean; source: string;
-        channel: string | null; createdAt: string;
+        channel: string | null; createdAt: string; type?: string | null;
       }>;
     },
     async chatCompletion(a: {

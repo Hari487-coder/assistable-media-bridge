@@ -10,7 +10,8 @@ export interface TenantInput {
 }
 export interface Tenant extends TenantInput {
   id: string; token: string; wakerEnabled: boolean; toolId: string | null;
-  enabled: boolean; modalities: { audio: boolean; image: boolean };
+  enabled: boolean;
+  modalities: { audio: boolean; image: boolean; reactions: boolean };
   /** Extra guidance appended to the built-in extraction prompt. Set from the
    *  dashboard, NOT part of TenantInput — it is an operational setting like the
    *  kill switches, so re-onboarding a location never wipes it. */
@@ -26,6 +27,7 @@ type Row = {
   assistant_id: string; provider: string; v3_key_enc: string;
   ghl_pit_enc: string; ai_key_enc: string; waker_enabled: number;
   tool_id: string | null; enabled: number; audio_on: number; image_on: number;
+  reactions_on: number | null;
   sub_account_id: string | null; analysis_instruction: string | null;
 };
 
@@ -38,7 +40,12 @@ export function createTenantStore(db: Db, key: Buffer) {
     aiKey: decryptSecret(r.ai_key_enc, key),
     wakerEnabled: r.waker_enabled === 1, toolId: r.tool_id,
     enabled: r.enabled === 1,
-    modalities: { audio: r.audio_on === 1, image: r.image_on === 1 },
+    modalities: {
+      audio: r.audio_on === 1, image: r.image_on === 1,
+      // NULL on rows that predate the column — the migration cannot backfill a
+      // DEFAULT into existing rows, so treat missing as on.
+      reactions: r.reactions_on === null || r.reactions_on === 1,
+    },
     analysisInstruction: r.analysis_instruction || null,
     ...(r.sub_account_id ? { subAccountId: r.sub_account_id } : {}),
   });
@@ -125,8 +132,8 @@ export function createTenantStore(db: Db, key: Buffer) {
       db.prepare("UPDATE tenants SET analysis_instruction = ? WHERE id = ?")
         .run(clean || null, id);
     },
-    setModality(id: string, which: "audio" | "image", on: boolean) {
-      const col = which === "audio" ? "audio_on" : "image_on";
+    setModality(id: string, which: "audio" | "image" | "reactions", on: boolean) {
+      const col = { audio: "audio_on", image: "image_on", reactions: "reactions_on" }[which];
       db.prepare(`UPDATE tenants SET ${col} = ? WHERE id = ?`).run(on ? 1 : 0, id);
     },
   };

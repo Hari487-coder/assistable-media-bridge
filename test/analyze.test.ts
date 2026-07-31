@@ -9,7 +9,7 @@ const tenant = {
   id: "t1", token: "tok", label: "T", locationId: "L", assistantId: "A",
   provider: "gemini", v3Key: "v", ghlPit: "p", aiKey: "k",
   wakerEnabled: true, toolId: null, enabled: true,
-  modalities: { audio: true, image: true }, analysisInstruction: null,
+  modalities: { audio: true, image: true, reactions: true }, analysisInstruction: null,
 } as Tenant;
 
 const oggBytes = new TextEncoder().encode("OggS....voicedata");
