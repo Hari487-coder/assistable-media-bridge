@@ -94,6 +94,24 @@ export async function ensureTool(
 }
 
 export async function provisionTenant(deps: ProvisionDeps, input: TenantInput) {
+  // Cheapest possible check, before a single network call. The Assistable
+  // subaccount id and the GHL location id are two DIFFERENT fields on the same
+  // record (SubAccount.id is a cuid; SubAccount.locationId is the CRM's id), so
+  // they are never equal — identical values mean the location id was pasted
+  // into both columns, which is the single most natural mistake here.
+  //
+  // Left to run it costs four API calls and then fails as "assistant is not
+  // visible to this v3 API key", because a workspace key happily resolves the
+  // bogus subaccount to an empty one with no assistants. That error sends
+  // people hunting through API keys instead of fixing the paste.
+  if (input.subAccountId && input.subAccountId === input.locationId) {
+    throw new Error(
+      "the Subaccount ID and the GHL location ID are the same value, but they are different identifiers. " +
+      "The subaccount id is Assistable's own and comes from the dashboard URL (/portal/<subAccountId>/...); " +
+      "the location id comes from the CRM"
+    );
+  }
+
   const v3 = deps.v3Factory(input.v3Key, input.subAccountId);
 
   // 1. Validate all three credentials live, before persisting anything.

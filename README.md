@@ -97,6 +97,14 @@ credentials **once** and a list of subaccounts, one per line:
 subAccountId, locationId, assistantId, label
 ```
 
+**`subAccountId` and `locationId` are two different ids.** They sit on the same
+record but hold different values: `SubAccount.id` is Assistable's own cuid,
+`SubAccount.locationId` is the CRM's. Take the subaccount id from the dashboard
+URL while inside it, `/portal/<subAccountId>/...`. Pasting the location id into
+both columns is the usual slip, so it is rejected up front with an explanation
+rather than failing four API calls later as "assistant is not visible to this v3
+API key".
+
 Commas or tabs, so a spreadsheet column paste works unchanged. Only the first
 two fields are required — leave the assistant blank and it is filled in
 automatically when that subaccount has exactly one; if it has several the row

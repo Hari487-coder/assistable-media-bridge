@@ -244,7 +244,9 @@ export function createPortalRouter(ctx: PortalCtx): Router {
               </div>
             </div>
             <div class="field">
-              <label for="subAccountId">Subaccount ID <span class="hint">— optional, only if your API key covers multiple subaccounts</span></label>
+              <label for="subAccountId">Subaccount ID <span class="hint">— optional, only if your API key
+                covers multiple subaccounts. This is Assistable's own id from the dashboard URL
+                (<code>/portal/&lt;subAccountId&gt;/...</code>), <strong>not</strong> the GHL location ID above.</span></label>
               <input id="subAccountId" name="subAccountId" placeholder="leave blank for a single-subaccount key">
             </div>
           </fieldset>
@@ -398,9 +400,13 @@ export function createPortalRouter(ctx: PortalCtx): Router {
             <label for="rows">One per line <span class="hint">— <code>subAccountId, locationId, assistantId, label</code>.
               Commas or tabs, so a spreadsheet paste works. Leave the assistant blank and it is filled
               in automatically when the subaccount has exactly one. Add <code>pit=&lt;token&gt;</code>
-              anywhere in a row to give that location its own GHL token.</span></label>
+              anywhere in a row to give that location its own GHL token.<br>
+              <strong>These are two different ids.</strong> The <em>subaccount id</em> is Assistable's own
+              and comes from the dashboard URL, <code>/portal/&lt;subAccountId&gt;/...</code>; the
+              <em>location id</em> comes from the CRM. Pasting the same value into both is the usual
+              slip.</span></label>
             <textarea id="rows" name="rows" spellcheck="false" required
-              placeholder="sub_a1b2, loc_9f8e, asst_1234, Main Street Dental&#10;sub_c3d4, loc_7a6b, , Riverside Chiropractic&#10;sub_e5f6, loc_5c4d, , Lakeside Vets, pit=pit-abc123">${esc(rowsText)}</textarea>
+              placeholder="clx7k2p9a0001qw8h3n5v2m4t, ve9EPM428h8vShlRW1KT, , Main Street Dental&#10;clx8m4r2b0002qw8h7j1k9p3z, kQ2mNb71xTfLpR3wZaYd, , Riverside Chiropractic&#10;clx9n5s3c0004qw8h2v6b8n1m, wR4pLc82yUgMqS5xBbZe, , Lakeside Vets, pit=pit-abc123">${esc(rowsText)}</textarea>
           </div>
         </fieldset>
         <button type="submit" class="btn btn-primary">Validate &amp; connect all</button>

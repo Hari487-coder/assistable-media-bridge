@@ -123,6 +123,26 @@ describe("provisionTenant", () => {
     const r = await provisionTenant(ctx as never, { ...input, subAccountId: "sub_42" });
     expect(ctx.tenants.getByToken(r.tenant.token)?.subAccountId).toBe("sub_42");
   });
+  it("rejects the location id pasted into the subaccount field, before any API call", async () => {
+    // Never equal in reality: SubAccount.id is a cuid, SubAccount.locationId is
+    // the CRM's id. Left to run this fails four calls later as "assistant is
+    // not visible to this v3 API key", which sends people hunting through API
+    // keys instead of fixing the paste.
+    let validateCalls = 0;
+    const v3 = makeV3({ validateKey: async () => { validateCalls += 1; return { ok: true as const }; } });
+    const { ctx } = deps(v3);
+    await expect(
+      provisionTenant(ctx as never, { ...input, subAccountId: input.locationId })
+    ).rejects.toThrow(/different identifiers/i);
+
+    expect(validateCalls).toBe(0); // caught before spending anything
+    expect(ctx.tenants.list()).toHaveLength(0);
+  });
+  it("still accepts a subAccountId that legitimately differs from the location", async () => {
+    const { ctx } = deps();
+    const r = await provisionTenant(ctx as never, { ...input, subAccountId: "sub_42" });
+    expect(ctx.tenants.getByToken(r.tenant.token)?.subAccountId).toBe("sub_42");
+  });
   it("re-onboarding the same GHL location reconnects instead of duplicating", async () => {
     // Two rows for one location = two waker cursors = the contact gets two AI
     // replies and every attachment is billed to the provider twice.

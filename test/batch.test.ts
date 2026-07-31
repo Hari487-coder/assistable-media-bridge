@@ -192,6 +192,22 @@ describe("provisionBatch", () => {
     expect(out[1].error).toMatch(/pit=<token>/);
     expect(tenants.list()).toHaveLength(1);
   });
+  it("fails the row when the location id was pasted into the subaccount column", async () => {
+    // The exact shape of a real onboarding attempt: same value in both columns
+    // on every row.
+    const { ctx, tenants } = makeCtx();
+    const { rows } = parseBatchRows([
+      "nYsYTNNoV948IVhNfmOj, nYsYTNNoV948IVhNfmOj, asst_default, One",
+      "clx7k2p9a0001qw8h3n5v, kQ2mNb71xTfLpR3wZaYd, asst_default, Two",
+    ].join("\n"));
+    const out = await provisionBatch(ctx as never, shared, rows);
+
+    expect(out.map((r) => r.ok)).toEqual([false, true]);
+    expect(out[0].error).toMatch(/different identifiers/i);
+    expect(out[0].error).toMatch(/portal/); // tells them where to find the real one
+    // The good row is untouched — one bad paste must not sink the batch.
+    expect(tenants.list().map((t) => t.locationId)).toEqual(["kQ2mNb71xTfLpR3wZaYd"]);
+  });
   it("is re-runnable: a repeat batch reconnects instead of duplicating", async () => {
     const { ctx, tenants } = makeCtx({ failPitFor: ["loc_2"] });
     const { rows } = parseBatchRows("sub_1, loc_1, asst_default\nsub_2, loc_2, asst_default");
