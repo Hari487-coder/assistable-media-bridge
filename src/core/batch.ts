@@ -148,7 +148,15 @@ async function resolveAssistantId(
   const assistants = await deps.v3Factory(shared.v3Key, row.subAccountId).listAssistants();
   if (assistants.length === 1) return assistants[0].id;
   if (assistants.length === 0) {
-    throw new Error("this subaccount has no assistants — create one first");
+    // "Create one first" was actively misleading: by far the likelier cause is
+    // that this is not an Assistable subaccount id at all — a workspace key
+    // resolves any value you hand it, so a CRM location id in this column
+    // silently resolves to an empty subaccount rather than erroring.
+    throw new Error(
+      `no assistants are visible in subaccount ${row.subAccountId}. Check that this is Assistable's ` +
+      "subaccount id, taken from the dashboard URL (/portal/<subAccountId>/...) — it is NOT the CRM " +
+      "location id, which belongs in the second column. If the id is right, the subaccount has no assistants yet"
+    );
   }
   throw new Error(
     `this subaccount has ${assistants.length} assistants, so the assistant ID cannot be inferred — name one of: ` +

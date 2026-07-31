@@ -65,6 +65,25 @@ describe("provisionTenant", () => {
     const { ctx } = deps(undefined, { ghlFactory: () => ({ validatePit: async () => false }) });
     await expect(provisionTenant(ctx as never, input)).rejects.toThrow(/GHL/i);
   });
+  it("names the wrong-subaccount-id cause when the subaccount is empty", async () => {
+    // A workspace key resolves ANY subaccount id handed to it, so a CRM location
+    // id in that field lands on an empty subaccount rather than erroring. Zero
+    // assistants is therefore a different diagnosis from "not the one you named".
+    const v3 = makeV3({ listAssistants: async () => [] });
+    const { ctx } = deps(v3);
+    await expect(
+      provisionTenant(ctx as never, { ...input, subAccountId: "nYsYTNNoV948IVhNfmOj" })
+    ).rejects.toThrow(/no assistants are visible in subaccount nYsYTNNoV948IVhNfmOj/);
+    await expect(
+      provisionTenant(ctx as never, { ...input, subAccountId: "nYsYTNNoV948IVhNfmOj" })
+    ).rejects.toThrow(/NOT the GHL location ID/);
+  });
+  it("points at the Subaccount ID field when an empty result has no subaccount set", async () => {
+    const v3 = makeV3({ listAssistants: async () => [] });
+    const { ctx } = deps(v3);
+    await expect(provisionTenant(ctx as never, input))
+      .rejects.toThrow(/fill in the Subaccount ID field/);
+  });
   it("rejects a v3 key whose subaccount cannot see the chosen assistant", async () => {
     // Each credential can be individually valid while resolving to a different
     // subaccount (live case: workspace key + blank Subaccount ID). No tenant

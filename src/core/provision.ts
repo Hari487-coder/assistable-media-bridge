@@ -145,6 +145,18 @@ export async function provisionTenant(deps: ProvisionDeps, input: TenantInput) {
       `could not list assistants with this v3 key${err instanceof Error ? ` — ${err.message}` : ""}`
     );
   }
+  // Zero assistants is a different diagnosis from "the one you named is not
+  // here", and conflating them sent a live tester hunting through API keys for
+  // an hour. A workspace key resolves ANY subaccount id it is handed, so a CRM
+  // location id in that field lands on an empty subaccount instead of erroring —
+  // which is exactly what an empty list means here.
+  if (assistants.length === 0) {
+    throw new Error(
+      input.subAccountId
+        ? `no assistants are visible in subaccount ${input.subAccountId}. Check that this is Assistable's subaccount id, taken from the dashboard URL (/portal/<subAccountId>/...) — it is NOT the GHL location ID. If the id is right, the subaccount has no assistants yet`
+        : "this v3 API key can see no assistants at all. If the key is workspace-wide, fill in the Subaccount ID field so it knows which subaccount to use"
+    );
+  }
   if (!assistants.some((a) => a.id === input.assistantId)) {
     throw new Error(
       `assistant ${input.assistantId} is not visible to this v3 API key — the key resolves to a different subaccount. Mint the API key inside the SAME subaccount as the assistant (Dashboard → Integrations → API Key), or if you use a workspace-wide key, fill in the Subaccount ID field.`

@@ -192,6 +192,16 @@ describe("provisionBatch", () => {
     expect(out[1].error).toMatch(/pit=<token>/);
     expect(tenants.list()).toHaveLength(1);
   });
+  it("blames the subaccount id, not a missing assistant, when the subaccount is empty", async () => {
+    // "This subaccount has no assistants, create one first" was actively
+    // misleading: the likelier cause is that the column holds a CRM location id.
+    const { ctx } = makeCtx({ assistants: { nYsYTNNoV948IVhNfmOj: [] } });
+    const { rows } = parseBatchRows("nYsYTNNoV948IVhNfmOj, loc_1");
+    const out = await provisionBatch(ctx as never, shared, rows);
+    expect(out[0].ok).toBe(false);
+    expect(out[0].error).toMatch(/no assistants are visible in subaccount/);
+    expect(out[0].error).toMatch(/NOT the CRM location id/);
+  });
   it("fails the row when the location id was pasted into the subaccount column", async () => {
     // The exact shape of a real onboarding attempt: same value in both columns
     // on every row.
