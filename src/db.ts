@@ -14,10 +14,11 @@ export function openDb(path: string): Db {
       waker_enabled INTEGER NOT NULL DEFAULT 1,
       tool_id TEXT, enabled INTEGER NOT NULL DEFAULT 1,
       audio_on INTEGER NOT NULL DEFAULT 1, image_on INTEGER NOT NULL DEFAULT 1,
-      -- Nullable on purpose, unlike audio_on/image_on: ALTER TABLE cannot
-      -- backfill a DEFAULT, so upgraded instances carry NULL here forever. A
-      -- fresh install declaring NOT NULL would give the two a different schema
-      -- for the same column. The store reads NULL as "on" so both agree.
+      -- RETIRED. Briefly gated an "assistant replies to emoji reactions"
+      -- feature that was removed; reactions are now always ignored. Kept, and
+      -- kept in the migration list below, so fresh and upgraded instances stay
+      -- schema-identical — dropping a column on a live SQLite file is a worse
+      -- trade than carrying an unread one. Nothing reads it.
       reactions_on INTEGER DEFAULT 1,
       sub_account_id TEXT, analysis_instruction TEXT,
       created_at INTEGER NOT NULL
@@ -38,10 +39,8 @@ export function openDb(path: string): Db {
   for (const stmt of [
     "ALTER TABLE tenants ADD COLUMN sub_account_id TEXT",
     "ALTER TABLE tenants ADD COLUMN analysis_instruction TEXT",
-    // No DEFAULT: SQLite would refuse NOT NULL on an ALTER without one, and a
-    // plain nullable column keeps existing rows NULL. The store reads NULL as
-    // "on", so instances upgrading in place get reactions enabled, matching a
-    // fresh install's DEFAULT 1.
+    // Retired — see the note on the column above. Kept so an instance that
+    // already took it and a fresh install stay schema-identical.
     "ALTER TABLE tenants ADD COLUMN reactions_on INTEGER",
   ]) {
     try { db.exec(stmt); } catch { /* column already present */ }

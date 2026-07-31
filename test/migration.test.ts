@@ -56,7 +56,7 @@ describe("in-place upgrade of a pre-existing instance", () => {
     const store = createTenantStore(db, KEY);
     const t = store.getByToken("tok1");
     expect(t?.label).toBe("Live Tenant");
-    expect(t?.modalities).toEqual({ audio: true, image: true, reactions: true });
+    expect(t?.modalities).toEqual({ audio: true, image: true });
     expect(t?.analysisInstruction).toBeNull();
     expect(t?.v3Key).toBe("v3key"); // secrets still decrypt after the migration
 

@@ -3,7 +3,7 @@ import { openDb } from "../src/db";
 import { createEventStore } from "../src/store/events";
 import { createProcessedStore } from "../src/store/processed";
 import {
-  REACTION_WAKE_INSTRUCTION, WAKE_INSTRUCTION, classifyEmptyInbound, isAuthFailure,
+  WAKE_INSTRUCTION, classifyEmptyInbound, isAuthFailure,
   runWakerCycle, startWaker,
 } from "../src/core/waker";
 import type { Tenant } from "../src/store/tenants";
@@ -12,7 +12,7 @@ const tenant = {
   id: "t1", token: "tok", label: "T", locationId: "L", assistantId: "A_default",
   provider: "gemini", v3Key: "v", ghlPit: "p", aiKey: "k",
   wakerEnabled: true, toolId: null, enabled: true,
-  modalities: { audio: true, image: true, reactions: true },
+  modalities: { audio: true, image: true },
 } as Tenant;
 
 const msg = (id: string, over: Partial<{ content: string | null; ai: boolean; source: string }> = {}) => ({
@@ -303,15 +303,15 @@ describe("runWakerCycle — per-cycle budget", () => {
   });
 });
 
-describe("reactions", () => {
+describe("reactions are recognised and ignored", () => {
   const reactionMsg = (id: string) =>
     ({ id, content: null, ai: false, source: "USER", channel: "whatsapp", createdAt: "t", type: "TEXT" });
   const imageMsg = (id: string) =>
     ({ id, content: null, ai: false, source: "USER", channel: "whatsapp", createdAt: "t", type: "IMAGE" });
 
   it("classifies by message type, defaulting to media when type is absent", () => {
-    // Absent type must stay media: an unknown type must never turn a working
-    // voice-note wake into "do not call the tool".
+    // Absent type must stay media: an unknown type must never silently downgrade
+    // a working voice-note wake into something we skip.
     expect(classifyEmptyInbound({})).toBe("media");
     expect(classifyEmptyInbound({ type: null })).toBe("media");
     for (const t of ["IMAGE", "AUDIO", "FILE", "VIDEO", "image", "audio"]) {
@@ -320,60 +320,52 @@ describe("reactions", () => {
     expect(classifyEmptyInbound({ type: "TEXT" })).toBe("reaction");
   });
 
-  it("wakes with the reaction instruction and never asks for the tool", async () => {
+  it("never wakes the assistant for a reaction", async () => {
     const withTool = { ...tenant, toolId: "tool-1" } as Tenant;
     const { deps, wakes, assigns } = make("2026-07-23T10:00:00Z", [reactionMsg("r1")]);
     deps.state.set("t1", "2026-07-23T09:00:00Z");
     const r = await runWakerCycle(deps as never, withTool);
 
-    expect(r.woken).toBe(1);
-    expect(wakes[0].additionalInstructions).toBe(REACTION_WAKE_INSTRUCTION);
-    expect(wakes[0].additionalInstructions).toContain("do NOT call the analyze_attachment tool");
-    // Nothing to read → no reason to spend an assign round-trip.
+    expect(r.woken).toBe(0);
+    expect(wakes).toHaveLength(0);
     expect(assigns).toHaveLength(0);
-    // The raw type is logged so the FIRST live reaction reveals what a real
-    // channel actually sends, straight from the dashboard.
+  });
+
+  it("marks reactions processed so they are not re-detected every cycle", async () => {
+    const { deps } = make("2026-07-23T10:00:00Z", [reactionMsg("r1")]);
+    deps.state.set("t1", "2026-07-23T09:00:00Z");
+    await runWakerCycle(deps as never, tenant);
+
+    expect(deps.processed.has("t1", "waker:r1")).toBe(true);
     expect(deps.events.latest("t1", 10).some(
-      (e) => e.detail.includes("reactions=1") && e.detail.includes("types=TEXT")
+      (e) => e.detail.includes("reactions=1") && e.detail.includes("ignored")
     )).toBe(true);
   });
 
-  it("media wins when a burst mixes an attachment and a reaction", async () => {
+  it("still wakes on a burst that mixes an attachment with a reaction", async () => {
+    // The photo is the whole point of the bridge; a reaction alongside it must
+    // not suppress reading it.
     const withTool = { ...tenant, toolId: "tool-1" } as Tenant;
     const { deps, wakes, assigns } = make("2026-07-23T10:00:00Z", [imageMsg("m1"), reactionMsg("r1")]);
     deps.state.set("t1", "2026-07-23T09:00:00Z");
-    await runWakerCycle(deps as never, withTool);
+    const r = await runWakerCycle(deps as never, withTool);
 
-    // Reading the photo is strictly more useful, and that instruction already
-    // covers replying to the contact.
+    expect(r.woken).toBe(1);
     expect(wakes[0].additionalInstructions).toBe(WAKE_INSTRUCTION);
     expect(assigns).toHaveLength(1);
-  });
-
-  it("honours the reactions kill switch without re-detecting forever", async () => {
-    const off = { ...tenant, modalities: { audio: true, image: true, reactions: false } } as Tenant;
-    const { deps, wakes } = make("2026-07-23T10:00:00Z", [reactionMsg("r1")]);
-    deps.state.set("t1", "2026-07-23T09:00:00Z");
-    const r = await runWakerCycle(deps as never, off);
-
-    expect(r.woken).toBe(0);
-    expect(wakes).toHaveLength(0);
-    // Marked anyway — otherwise every cycle would re-detect the same reaction.
     expect(deps.processed.has("t1", "waker:r1")).toBe(true);
-    expect(deps.events.latest("t1", 10).some((e) => e.detail.includes("reactions off"))).toBe(true);
   });
 
-  it("a disabled reaction never blocks a later real attachment", async () => {
-    const off = { ...tenant, modalities: { audio: true, image: true, reactions: false } } as Tenant;
+  it("an ignored reaction never blocks a later real attachment", async () => {
     const msgs = [reactionMsg("r1")];
     const { deps, wakes } = make("2026-07-23T10:00:00Z", msgs);
     deps.state.set("t1", "2026-07-23T09:00:00Z");
-    await runWakerCycle(deps as never, off);
+    await runWakerCycle(deps as never, tenant);
     expect(wakes).toHaveLength(0);
 
     msgs.push(imageMsg("m1"));
     deps.state.set("t1", "2026-07-23T09:00:00Z");
-    await runWakerCycle(deps as never, off);
+    await runWakerCycle(deps as never, tenant);
     expect(wakes).toHaveLength(1);
     expect(wakes[0].additionalInstructions).toBe(WAKE_INSTRUCTION);
   });

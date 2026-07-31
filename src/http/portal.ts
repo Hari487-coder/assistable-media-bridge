@@ -533,7 +533,6 @@ export function createPortalRouter(ctx: PortalCtx): Router {
           <span class="stat">Provider <span class="pill on">${esc(t.provider)}</span></span>
           <span class="stat">Voice notes <span class="pill ${t.modalities.audio ? "on" : "off"}">${t.modalities.audio ? "on" : "off"}</span></span>
           <span class="stat">Images <span class="pill ${t.modalities.image ? "on" : "off"}">${t.modalities.image ? "on" : "off"}</span></span>
-          <span class="stat">Reactions <span class="pill ${t.modalities.reactions ? "on" : "off"}">${t.modalities.reactions ? "on" : "off"}</span></span>
         </div>
         <form method="post" action="/dashboard/${t.token}/toggle">
           <div class="btn-row">
@@ -541,12 +540,8 @@ export function createPortalRouter(ctx: PortalCtx): Router {
             <button class="btn btn-ghost" name="what" value="waker">Turn waker ${t.wakerEnabled ? "off" : "on"}</button>
             <button class="btn btn-ghost" name="what" value="audio">Turn voice notes ${t.modalities.audio ? "off" : "on"}</button>
             <button class="btn btn-ghost" name="what" value="image">Turn images ${t.modalities.image ? "off" : "on"}</button>
-            <button class="btn btn-ghost" name="what" value="reactions">Turn reactions ${t.modalities.reactions ? "off" : "on"}</button>
           </div>
         </form>
-        <p class="lede" style="margin:10px 0 0;font-size:13px">Reactions: when a contact taps an emoji
-          on a message without sending text, the assistant is woken to reply. Turn this off if it feels
-          chatty — a thumbs-up often just means the conversation is finished.</p>
         <div class="section-title">What to look for</div>
         <form method="post" action="/dashboard/${t.token}/instruction">
           <div class="field">
@@ -688,7 +683,6 @@ export function createPortalRouter(ctx: PortalCtx): Router {
     if (what === "waker") ctx.tenants.setWaker(t.id, !t.wakerEnabled);
     if (what === "audio") ctx.tenants.setModality(t.id, "audio", !t.modalities.audio);
     if (what === "image") ctx.tenants.setModality(t.id, "image", !t.modalities.image);
-    if (what === "reactions") ctx.tenants.setModality(t.id, "reactions", !t.modalities.reactions);
     res.redirect(`/dashboard/${t.token}`);
   });
 
