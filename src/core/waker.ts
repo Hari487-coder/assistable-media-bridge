@@ -226,6 +226,24 @@ export interface WakerRuntimeOptions {
   /** Called when one pass outruns the poll interval. Injectable for tests; the
    *  default writes to the service log, which is where an operator would look. */
   onOverrun?: (info: { durationMs: number; tenants: number; intervalMs: number }) => void;
+  /** Called once a tenant's poll has failed authentication this many times in a
+   *  row. Wired to pause that tenant so a dead key stops being retried. */
+  onAuthFailures?: (info: { tenant: Tenant; consecutive: number; lastError: string }) => void;
+  authFailureLimit?: number;
+}
+
+// Three misses is past any plausible blip and well short of noticing a
+// revoked key by accident.
+const DEFAULT_AUTH_FAILURE_LIMIT = 3;
+
+/**
+ * Does this poll failure mean "the key will never work again" rather than "try
+ * later"? Only auth failures auto-pause a tenant: a 500 or a timeout is exactly
+ * the case where retrying every 25s IS the correct behaviour, and pausing on it
+ * would take a healthy subaccount offline until someone noticed.
+ */
+export function isAuthFailure(message: string): boolean {
+  return /\b(401|403)\b/.test(message) || /unauthor|forbidden|invalid api key/i.test(message);
 }
 
 const defaultOnOverrun = (i: { durationMs: number; tenants: number; intervalMs: number }) => {
@@ -244,6 +262,11 @@ export function startWaker(
 ): { stop(): void } {
   const concurrency = Math.max(1, opts.concurrency ?? DEFAULT_WAKER_CONCURRENCY);
   const onOverrun = opts.onOverrun ?? defaultOnOverrun;
+  const authLimit = Math.max(1, opts.authFailureLimit ?? DEFAULT_AUTH_FAILURE_LIMIT);
+  // Consecutive auth failures per tenant. In-memory on purpose: the PAUSE it
+  // triggers is persisted, so a restart cannot resume the storm, but the counter
+  // itself should start clean.
+  const authFails = new Map<string, number>();
   let running = false;
   const timer = setInterval(async () => {
     if (running) return; // no overlapping passes if a cycle runs long
@@ -255,8 +278,24 @@ export function startWaker(
       await mapLimit(due, concurrency, async (t) => {
         try {
           await cycleFor(t);
-        } catch {
-          // per-tenant isolation — one tenant's failure never stalls others
+          authFails.delete(t.id); // a good poll clears the streak
+        } catch (err) {
+          // per-tenant isolation — one tenant's failure never stalls others.
+          // But a REVOKED key fails identically forever, and retrying it every
+          // 25s hammers the customer's API and shows up in their logs as a
+          // runaway process (observed live: a tester revoked their key and the
+          // requests kept coming). Count auth failures and hand the tenant off
+          // to be paused. Non-auth failures deliberately do not increment: a
+          // transient outage SHOULD keep retrying.
+          const lastError = err instanceof Error ? err.message : "unknown";
+          if (!isAuthFailure(lastError)) return;
+          const consecutive = (authFails.get(t.id) ?? 0) + 1;
+          authFails.set(t.id, consecutive);
+          if (consecutive < authLimit) return;
+          authFails.delete(t.id);
+          try {
+            opts.onAuthFailures?.({ tenant: t, consecutive, lastError });
+          } catch { /* pausing must never break the poll loop */ }
         }
       });
     } finally {

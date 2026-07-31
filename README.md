@@ -351,6 +351,21 @@ Passes never overlap: if one runs long the next tick is skipped, so the
 
 Rough sizing: one pass costs roughly `tenants / concurrency` round-trips of
 latency in the quiet case. At the defaults, ~40 tenants still fits inside 25s.
+
+### How much traffic this generates
+
+One `GET /v3/conversations` per connected subaccount per interval. At the
+defaults that is **one request every 25 seconds per subaccount** — three
+connected locations produce three requests every 25s, which is what a customer
+sees as a steady beat in their API request log. That is the polling design, not
+a loop.
+
+If a key is revoked, those polls start failing 401. After three consecutive
+authentication failures the waker **pauses that tenant** and records why. The
+pause is persisted, so a restart does not resume hammering a dead key; turning
+the waker back on is a deliberate click once the key is fixed. Transient
+failures (500, 429, timeouts) never pause a tenant — retrying is the correct
+response to those.
 - **Providers:** Gemini (raw REST call to `generativelanguage.googleapis.com`, handles audio/image/PDF) and OpenAI (Whisper for audio, `gpt-4o-mini` vision for images; PDF unsupported). No provider SDK dependency — plain `fetch`. Each implements `describe({ kind, mime, bytes })` → text on the customer's BYO key.
 - **Crypto:** AES-256-GCM for credential encryption at rest; one fixed master key (`ENCRYPTION_KEY`), a fresh random IV on every write.
 

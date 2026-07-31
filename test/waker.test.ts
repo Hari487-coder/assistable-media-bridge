@@ -3,7 +3,7 @@ import { openDb } from "../src/db";
 import { createEventStore } from "../src/store/events";
 import { createProcessedStore } from "../src/store/processed";
 import {
-  REACTION_WAKE_INSTRUCTION, WAKE_INSTRUCTION, classifyEmptyInbound,
+  REACTION_WAKE_INSTRUCTION, WAKE_INSTRUCTION, classifyEmptyInbound, isAuthFailure,
   runWakerCycle, startWaker,
 } from "../src/core/waker";
 import type { Tenant } from "../src/store/tenants";
@@ -376,5 +376,100 @@ describe("reactions", () => {
     await runWakerCycle(deps as never, off);
     expect(wakes).toHaveLength(1);
     expect(wakes[0].additionalInstructions).toBe(WAKE_INSTRUCTION);
+  });
+});
+
+describe("revoked key does not poll forever", () => {
+  const paused = () => {
+    const calls: Array<{ id: string; consecutive: number; lastError: string }> = [];
+    return {
+      calls,
+      onAuthFailures: (i: { tenant: Tenant; consecutive: number; lastError: string }) =>
+        calls.push({ id: i.tenant.id, consecutive: i.consecutive, lastError: i.lastError }),
+    };
+  };
+
+  it("classifies only auth failures as permanent", () => {
+    for (const m of [
+      "v3 listConversations HTTP 401 (unauthorized: bad key)",
+      "v3 listConversations HTTP 403 (forbidden)",
+      "Unauthorized",
+      "invalid api key",
+    ]) expect(isAuthFailure(m)).toBe(true);
+    // A transient failure SHOULD keep retrying — pausing on it would take a
+    // healthy subaccount offline until a human noticed.
+    for (const m of [
+      "v3 listConversations HTTP 500",
+      "timed out after 15000ms",
+      "network error",
+      "v3 listConversations HTTP 429",
+    ]) expect(isAuthFailure(m)).toBe(false);
+  });
+
+  it("hands the tenant off to be paused after repeated auth failures", async () => {
+    const p = paused();
+    const handle = startWaker(
+      async () => { throw new Error("v3 listConversations HTTP 401 (unauthorized)"); },
+      () => [tenant],
+      2,
+      { onAuthFailures: p.onAuthFailures, authFailureLimit: 3, onOverrun: () => {} }
+    );
+    await new Promise((res) => setTimeout(res, 60));
+    handle.stop();
+    expect(p.calls.length).toBeGreaterThan(0);
+    expect(p.calls[0]).toMatchObject({ id: "t1", consecutive: 3 });
+    expect(p.calls[0].lastError).toMatch(/401/);
+  });
+
+  it("never pauses on transient failures, however many", async () => {
+    const p = paused();
+    const handle = startWaker(
+      async () => { throw new Error("v3 listConversations HTTP 500"); },
+      () => [tenant],
+      2,
+      { onAuthFailures: p.onAuthFailures, authFailureLimit: 3, onOverrun: () => {} }
+    );
+    await new Promise((res) => setTimeout(res, 60));
+    handle.stop();
+    expect(p.calls).toHaveLength(0);
+  });
+
+  it("a successful poll clears the streak", async () => {
+    const p = paused();
+    let n = 0;
+    const handle = startWaker(
+      async () => {
+        n += 1;
+        // fail, fail, succeed, fail, fail... never three in a row
+        if (n % 3 === 0) return { woken: 0 };
+        throw new Error("HTTP 401");
+      },
+      () => [tenant],
+      2,
+      { onAuthFailures: p.onAuthFailures, authFailureLimit: 3, onOverrun: () => {} }
+    );
+    await new Promise((res) => setTimeout(res, 90));
+    handle.stop();
+    expect(n).toBeGreaterThan(5); // it really did keep polling
+    expect(p.calls).toHaveLength(0);
+  });
+
+  it("one tenant's dead key never pauses another", async () => {
+    const p = paused();
+    const good = { ...tenant, id: "good" } as Tenant;
+    const bad = { ...tenant, id: "bad" } as Tenant;
+    const handle = startWaker(
+      async (t) => {
+        if (t.id === "bad") throw new Error("HTTP 401 unauthorized");
+        return { woken: 0 };
+      },
+      () => [good, bad],
+      2,
+      { onAuthFailures: p.onAuthFailures, authFailureLimit: 3, onOverrun: () => {} }
+    );
+    await new Promise((res) => setTimeout(res, 60));
+    handle.stop();
+    expect(p.calls.every((c) => c.id === "bad")).toBe(true);
+    expect(p.calls.length).toBeGreaterThan(0);
   });
 });

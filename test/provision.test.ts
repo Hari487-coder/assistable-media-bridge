@@ -88,10 +88,19 @@ describe("provisionTenant", () => {
     // Each credential can be individually valid while resolving to a different
     // subaccount (live case: workspace key + blank Subaccount ID). No tenant
     // row may be created from an incoherent trio.
-    const v3 = makeV3({ listAssistants: async () => [{ id: "OTHER", name: "Elsewhere" }] });
+    const v3 = makeV3({
+      listAssistants: async () => [
+        { id: "OTHER", name: "Elsewhere" }, { id: "OTHER2", name: "Also Here" },
+      ],
+    });
     const { ctx } = deps(v3);
-    await expect(provisionTenant(ctx as never, input)).rejects.toThrow(/different subaccount/i);
+    // Naming what IS available turns a dead end into a self-service fix: the
+    // right id is usually one of these, since the commonest cause is pairing a
+    // row's assistant with the wrong subaccount.
+    await expect(provisionTenant(ctx as never, input))
+      .rejects.toThrow(/OTHER \(Elsewhere\), OTHER2 \(Also Here\)/);
     expect(v3.calls.createdName).toBe(""); // never reached tool creation
+    expect(ctx.tenants.list()).toHaveLength(0);
   });
   it("reuses an existing tool on 409 conflict, repoints its URL, then assigns it", async () => {
     const v3 = makeV3({ createTool: async () => ({ id: null, conflict: true as const, raw: {} }) });

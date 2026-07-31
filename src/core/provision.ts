@@ -158,8 +158,17 @@ export async function provisionTenant(deps: ProvisionDeps, input: TenantInput) {
     );
   }
   if (!assistants.some((a) => a.id === input.assistantId)) {
+    // Listing what IS here turns a dead end into a self-service fix. Without it
+    // the only next move is guessing, and the commonest cause is simply pairing
+    // a row's assistant with the wrong subaccount when onboarding several at
+    // once — the right id is usually one of the ones printed below.
+    const visible = assistants.slice(0, 10)
+      .map((a) => `${a.id} (${a.name})`).join(", ");
+    const more = assistants.length > 10 ? `, and ${assistants.length - 10} more` : "";
     throw new Error(
-      `assistant ${input.assistantId} is not visible to this v3 API key — the key resolves to a different subaccount. Mint the API key inside the SAME subaccount as the assistant (Dashboard → Integrations → API Key), or if you use a workspace-wide key, fill in the Subaccount ID field.`
+      `assistant ${input.assistantId} is not in ${input.subAccountId ? `subaccount ${input.subAccountId}` : "the subaccount this key resolves to"}. ` +
+      `Assistants that ARE available here: ${visible}${more}. ` +
+      "Use one of those, or check the row is pointing at the right subaccount."
     );
   }
 
