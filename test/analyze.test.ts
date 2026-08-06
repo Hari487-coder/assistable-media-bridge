@@ -109,6 +109,44 @@ describe("analyzeForContact", () => {
     expect(described).toEqual(["audio:audio/ogg", "image:image/png"]);
     expect(r.processedIds).toEqual(["gVoice", "gImg"]);
   });
+  it("a camera video is watched and labeled as a video, not a voice note", async () => {
+    // The live failure: MP4 videos were sniffed as audio, so the model only
+    // heard the soundtrack and the assistant asked the contact what was in
+    // their own video.
+    const mp4 = new Uint8Array(16);
+    mp4.set(new TextEncoder().encode("ftyp"), 4);
+    mp4.set(new TextEncoder().encode("isom"), 8);
+    const seen: string[] = [];
+    const d = deps({
+      ghl: {
+        latestMediaMessages: async () => [
+          { id: "gVid", attachments: ["https://storage.msgsndr.com/clip.mp4"], direction: "inbound", dateAdded: "t1" },
+        ],
+        validatePit: async () => ({ ok: true as const }),
+      },
+      provider: {
+        describe: async (i: { kind: string; mime: string }) => {
+          seen.push(`${i.kind}:${i.mime}`);
+          return "a person waves at the camera and says: bis Freitag";
+        },
+        validateKey: async () => ({ ok: true as const }),
+      },
+      fetchImpl: (async () => new Response(mp4)) as unknown as typeof fetch,
+    });
+    const r = await analyzeForContact(d as never, tenant, "C1");
+    expect(seen).toEqual(["video:video/mp4"]);
+    expect(r.text).toContain("🎬 Video: a person waves at the camera");
+    expect(r.text).not.toContain("Voice note transcript");
+  });
+  it("video rides the image modality toggle", async () => {
+    const mp4 = new Uint8Array(16);
+    mp4.set(new TextEncoder().encode("ftyp"), 4);
+    mp4.set(new TextEncoder().encode("isom"), 8);
+    const d = deps({ fetchImpl: (async () => new Response(mp4)) as unknown as typeof fetch });
+    const t2 = { ...tenant, modalities: { audio: true, image: false } };
+    const r = await analyzeForContact(d as never, t2 as Tenant, "C1");
+    expect(r.text).toContain("video processing is disabled");
+  });
   it("a disallowed attachment host records the blocked hostname, never the full URL", async () => {
     const d = deps({ ghl: {
       latestMediaMessages: async () => [

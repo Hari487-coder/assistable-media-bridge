@@ -14,7 +14,7 @@ export interface AnalyzeDeps {
   fetchImpl?: typeof fetch;
 }
 
-const LABELS = { audio: "🎤 Voice note transcript", image: "📷 Image", pdf: "📄 Document" } as const;
+const LABELS = { audio: "🎤 Voice note transcript", image: "📷 Image", video: "🎬 Video", pdf: "📄 Document" } as const;
 const MAX_ATTACHMENTS = 3;
 
 export async function analyzeForContact(
@@ -81,6 +81,13 @@ export async function analyzeForContact(
         }
         if (s.kind === "image" && !tenant.modalities.image) {
           sections.push("[image processing is disabled for this account]");
+          continue;
+        }
+        // Video rides the image toggle — one switch for the visual channel. A
+        // tenant that turned images off to control provider cost must not have
+        // the far more expensive video slip through on a separate flag.
+        if (s.kind === "video" && !tenant.modalities.image) {
+          sections.push("[video processing is disabled for this account]");
           continue;
         }
         const text = await deps.provider.describe({

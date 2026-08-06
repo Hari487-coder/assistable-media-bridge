@@ -4,9 +4,9 @@ import type { MediaProvider } from "../providers";
 import type { Tenant, TenantInput, TenantStore } from "../store/tenants";
 
 export const TOOL_DESCRIPTION =
-  "Read the contact's most recent attachment (voice note, image, or document) and " +
-  "return its content as text. Call this whenever the contact sends or mentions an " +
-  "attachment, photo, voice note, or document.";
+  "Read the contact's most recent attachment (voice note, image, video, or document) " +
+  "and return its content as text. Call this whenever the contact sends or mentions " +
+  "an attachment, photo, video, voice note, or document.";
 
 const TOOL_NAME = "analyze_attachment";
 
@@ -242,6 +242,6 @@ export async function provisionTenant(deps: ProvisionDeps, input: TenantInput) {
 }
 
 export const PROMPT_SNIPPET =
-  "If the contact sends, or refers to, a photo, image, screenshot, document, or " +
-  "voice note, ALWAYS call the analyze_attachment tool first to read it, then " +
+  "If the contact sends, or refers to, a photo, image, screenshot, video, document, " +
+  "or voice note, ALWAYS call the analyze_attachment tool first to read it, then " +
   "respond based on its content. Never say you cannot open attachments.";

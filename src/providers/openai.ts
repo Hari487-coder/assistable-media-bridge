@@ -11,6 +11,8 @@ export function openaiProvider(apiKey: string, fetchImpl?: typeof fetch): MediaP
   return {
     async describe(input: MediaInput) {
       if (input.kind === "pdf") return "[PDF reading is not yet supported on the OpenAI provider]";
+      if (input.kind === "video")
+        return "[video reading is not supported on the OpenAI provider — the Gemini provider can watch videos. Tell the contact you cannot open videos yet and ask them to describe it or send a photo instead]";
       if (input.kind === "audio") {
         const form = new FormData();
         form.set("model", "whisper-1");

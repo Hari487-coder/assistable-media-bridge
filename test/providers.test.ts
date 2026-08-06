@@ -77,6 +77,24 @@ describe("gemini adapter", () => {
       .rejects.toThrow(/^gemini 429$/);
     expect(calls).toHaveLength(1);
   });
+  it("sends video as inline_data with the watch-and-transcribe prompt", async () => {
+    const { impl, calls } = capture({
+      candidates: [{ content: { parts: [{ text: "a person on a scale; they say: fünf Kilo abnehmen" }] } }],
+    });
+    const p = getProvider("gemini", "GK", impl);
+    const out = await p.describe({ kind: "video", mime: "video/mp4", bytes: new Uint8Array([1]) });
+    expect(out).toContain("fünf Kilo");
+    const body = JSON.parse(String(calls[0].init.body));
+    expect(body.contents[0].parts[0].inline_data.mime_type).toBe("video/mp4");
+    expect(body.contents[0].parts[1].text).toMatch(/video shows/);
+    expect(body.contents[0].parts[1].text).toMatch(/never translate/);
+  });
+  it("the audio prompt pins the transcript to the spoken language", () => {
+    // A German voice note must reach the assistant as German — the assistant
+    // replies in whatever language the transcript arrives in.
+    expect(PROMPTS.audio).toMatch(/language it was spoken/);
+    expect(PROMPTS.audio).toMatch(/never translate/);
+  });
   it("sends images as inline_data with the OCR prompt", async () => {
     const { impl, calls } = capture({
       candidates: [{ content: { parts: [{ text: "a red card on a wooden table" }] } }],
@@ -111,6 +129,13 @@ describe("openai adapter", () => {
     const p = getProvider("openai", "OK", capture({}).impl);
     const out = await p.describe({ kind: "pdf", mime: "application/pdf", bytes: new Uint8Array([1]) });
     expect(out).toContain("not yet supported");
+  });
+  it("video returns an honest notice instead of guessing", async () => {
+    const { impl, calls } = capture({});
+    const p = getProvider("openai", "OK", impl);
+    const out = await p.describe({ kind: "video", mime: "video/mp4", bytes: new Uint8Array([1]) });
+    expect(out).toContain("video reading is not supported on the OpenAI provider");
+    expect(calls).toHaveLength(0); // no API spend on a kind it cannot handle
   });
 });
 

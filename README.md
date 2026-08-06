@@ -1,8 +1,8 @@
 # Media MCP Bridge
 
-A Model Context Protocol service that connects Assistable v3 assistants to media attachments (voice notes, images, documents) sent through GHL subaccounts.
+A Model Context Protocol service that connects Assistable v3 assistants to media attachments (voice notes, images, videos, documents) sent through GHL subaccounts.
 
-When a contact sends a voice note, photo, or document via WhatsApp/SMS/email into GHL, the assistant can now read it—automatically waking and analyzing on detect, or on-demand through the tool.
+When a contact sends a voice note, photo, video, or document via WhatsApp/SMS/email into GHL, the assistant can now read it—automatically waking and analyzing on detect, or on-demand through the tool. Videos are watched and transcribed on the Gemini provider; the OpenAI provider covers voice notes and images only.
 
 ## Deploy your own in 3 steps
 

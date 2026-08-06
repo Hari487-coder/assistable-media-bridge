@@ -11,9 +11,22 @@ describe("sniff", () => {
     expect(sniff(new TextEncoder().encode("OggS....")).mime).toBe("audio/ogg");
     expect(sniff(new TextEncoder().encode("%PDF-1.7")).kind).toBe("pdf");
     expect(sniff(new TextEncoder().encode("ID3\x03tag")).mime).toBe("audio/mpeg");
-    const m4a = new Uint8Array(12); m4a.set(new TextEncoder().encode("ftyp"), 4);
-    expect(sniff(m4a).mime).toBe("audio/mp4");
     expect(sniff(bytes(1, 2, 3)).kind).toBe("unknown");
+  });
+  it("splits the ftyp family by major brand: voice memos are audio, camera videos are video", () => {
+    // The live failure: an iPhone/WhatsApp video is an MP4 too, and calling it
+    // audio fed the tester's video to the model as a voice note.
+    const ftyp = (brand: string) => {
+      const b = new Uint8Array(16);
+      b.set(new TextEncoder().encode("ftyp"), 4);
+      b.set(new TextEncoder().encode(brand), 8);
+      return b;
+    };
+    expect(sniff(ftyp("M4A "))).toEqual({ kind: "audio", mime: "audio/mp4" });
+    expect(sniff(ftyp("isom"))).toEqual({ kind: "video", mime: "video/mp4" });
+    expect(sniff(ftyp("mp42"))).toEqual({ kind: "video", mime: "video/mp4" });
+    expect(sniff(ftyp("3gp4"))).toEqual({ kind: "video", mime: "video/3gpp" });
+    expect(sniff(ftyp("qt  "))).toEqual({ kind: "video", mime: "video/quicktime" });
   });
   it("detects webp vs wav (RIFF disambiguation)", () => {
     const webp = new Uint8Array(12);

@@ -1,5 +1,5 @@
 export interface MediaInput {
-  kind: "audio" | "image" | "pdf"; mime: string; bytes: Uint8Array;
+  kind: "audio" | "image" | "video" | "pdf"; mime: string; bytes: Uint8Array;
   /** Optional per-tenant guidance appended to the built-in prompt. */
   instruction?: string | null;
 }
@@ -8,9 +8,13 @@ export interface MediaProvider {
   describe(input: MediaInput): Promise<string>;
   validateKey(): Promise<KeyCheck>;
 }
+// "in the language it was spoken" is load-bearing: a tester's German voice
+// note must reach the assistant as German, not as the model's helpful English
+// translation — the assistant replies in whatever language the transcript is.
 export const PROMPTS = {
-  audio: "Transcribe this voice message verbatim. Reply with ONLY the transcript text.",
+  audio: "Transcribe this voice message verbatim, in the language it was spoken — never translate it. Reply with ONLY the transcript text.",
   image: "Describe this image for a customer-support agent. Extract ALL visible text verbatim (OCR), then add a one-sentence description of what the image shows.",
+  video: "This is a video sent by a customer. Describe for a customer-support agent what the video shows, then transcribe any speech verbatim, in the language it was spoken — never translate it.",
   pdf: "Extract the full text of this document, then summarize it in 2 sentences.",
 } as const;
 
