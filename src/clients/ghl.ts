@@ -82,11 +82,25 @@ export function createGhlClient(opts: GhlClientOptions) {
         .sort((a, b) => (a.dateAdded < b.dateAdded ? 1 : -1))
         .slice(0, q.limit ?? 3);
     },
-    async validatePit(locationId: string): Promise<boolean> {
+    // A bare pass/fail here forced every failure — bad token, wrong-subaccount
+    // token, bogus location id, GHL outage — into one identical error, which
+    // sent a live tester re-minting tokens when the actual problem was the
+    // location id. The status + GHL's own error body let the caller say which.
+    async validatePit(
+      locationId: string
+    ): Promise<{ ok: true } | { ok: false; status?: number; detail?: string }> {
+      let r: Awaited<ReturnType<typeof get>>;
       try {
-        const r = await get(`/conversations/search?locationId=${encodeURIComponent(locationId)}&limit=1`);
-        return r.ok;
-      } catch { return false; }
+        r = await get(`/conversations/search?locationId=${encodeURIComponent(locationId)}&limit=1`);
+      } catch (err) {
+        return { ok: false, detail: err instanceof Error ? err.message : "network error" };
+      }
+      if (r.ok) return { ok: true };
+      // GHL error bodies carry `message` (string or string[]) and/or `error`.
+      const raw = r.json?.message ?? r.json?.error;
+      const body = (Array.isArray(raw) ? raw.join("; ") : typeof raw === "string" ? raw : "")
+        .slice(0, 200);
+      return { ok: false, status: r.status, ...(body ? { detail: body } : {}) };
     },
   };
 }

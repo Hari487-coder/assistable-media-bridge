@@ -31,7 +31,7 @@ function makeApp(overrides?: Partial<ToolRouterCtx>) {
       latestMediaMessages: async () => [
         { id: "g1", attachments: ["https://storage.msgsndr.com/a.ogg"], direction: "inbound", dateAdded: "t" },
       ],
-      validatePit: async () => true,
+      validatePit: async () => ({ ok: true as const }),
     }) as never,
     providerFactory: () => ({
       describe: async () => "voice says hi",

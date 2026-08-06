@@ -36,7 +36,7 @@ function deps(v3?: ReturnType<typeof makeV3>, over: Partial<Record<string, unkno
       tenants: createTenantStore(db, Buffer.alloc(32, 2)),
       publicBaseUrl: "https://media.example.com",
       v3Factory: () => v.client,
-      ghlFactory: () => ({ validatePit: async () => true }),
+      ghlFactory: () => ({ validatePit: async () => ({ ok: true as const }) }),
       providerFactory: () => ({ validateKey: async () => ({ ok: true as const }), describe: async () => "" }),
       ...over,
     },
@@ -61,9 +61,40 @@ describe("provisionTenant", () => {
     const { ctx } = deps(v3);
     await expect(provisionTenant(ctx as never, input)).rejects.toThrow(/subaccount_required/);
   });
-  it("throws naming the failing credential", async () => {
-    const { ctx } = deps(undefined, { ghlFactory: () => ({ validatePit: async () => false }) });
-    await expect(provisionTenant(ctx as never, input)).rejects.toThrow(/GHL/i);
+  it("a 401 PIT failure quotes GHL's exact response and blames the token itself", async () => {
+    const { ctx } = deps(undefined, {
+      ghlFactory: () => ({ validatePit: async () => ({ ok: false as const, status: 401, detail: "Invalid JWT" }) }),
+    });
+    const err = await provisionTenant(ctx as never, input).catch((e: Error) => e);
+    expect(String(err)).toMatch(/HTTP 401 — "Invalid JWT"/);
+    expect(String(err)).toMatch(/Settings → Private Integrations/);
+  });
+  it("a 403 PIT failure blames scope or a different subaccount, not the token", async () => {
+    const { ctx } = deps(undefined, {
+      ghlFactory: () => ({ validatePit: async () => ({ ok: false as const, status: 403 }) }),
+    });
+    const err = await provisionTenant(ctx as never, input).catch((e: Error) => e);
+    expect(String(err)).toMatch(/View Conversations/);
+    expect(String(err)).toMatch(/DIFFERENT subaccount/);
+  });
+  it("a 400 PIT failure blames the location id, not the token", async () => {
+    const { ctx } = deps(undefined, {
+      ghlFactory: () => ({
+        validatePit: async () => ({ ok: false as const, status: 400, detail: "locationId must be a string" }),
+      }),
+    });
+    const err = await provisionTenant(ctx as never, input).catch((e: Error) => e);
+    expect(String(err)).toMatch(/does not recognise L1/);
+    expect(String(err)).toMatch(/HTTP 400 — "locationId must be a string"/);
+    expect(String(err)).toMatch(/Business Profile/);
+  });
+  it("a statusless PIT failure is reported as connectivity, not a bad credential", async () => {
+    const { ctx } = deps(undefined, {
+      ghlFactory: () => ({ validatePit: async () => ({ ok: false as const, detail: "timed out after 15000ms" }) }),
+    });
+    const err = await provisionTenant(ctx as never, input).catch((e: Error) => e);
+    expect(String(err)).toMatch(/timed out after 15000ms/);
+    expect(String(err)).toMatch(/connectivity problem/);
   });
   it("names the wrong-subaccount-id cause when the subaccount is empty", async () => {
     // A workspace key resolves ANY subaccount id handed to it, so a CRM location
@@ -165,6 +196,37 @@ describe("provisionTenant", () => {
 
     expect(validateCalls).toBe(0); // caught before spending anything
     expect(ctx.tenants.list()).toHaveLength(0);
+  });
+  it("rejects SWAPPED subaccount/location values, before any API call", async () => {
+    // The live shape behind "GHL Private Integration Token failed validation":
+    // an Assistable cuid in the location column and the GHL id in the
+    // subaccount column. The PIT probe then asks GHL about a nonexistent
+    // location and the old error blamed the token.
+    let validateCalls = 0;
+    const v3 = makeV3({ validateKey: async () => { validateCalls += 1; return { ok: true as const }; } });
+    const { ctx } = deps(v3);
+    const err = await provisionTenant(ctx as never, {
+      ...input, locationId: "cms620jzf000tla049cc6msxv", subAccountId: "0moc3i2CepQ36yVHFE12",
+    }).catch((e: Error) => e);
+    expect(String(err)).toMatch(/looks like an Assistable subaccount id/);
+    expect(String(err)).toMatch(/appear SWAPPED/);
+    expect(validateCalls).toBe(0);
+    expect(ctx.tenants.list()).toHaveLength(0);
+  });
+  it("a cuid-shaped location with no subaccount set points at the CRM, not at swapping", async () => {
+    const { ctx } = deps();
+    const err = await provisionTenant(ctx as never, {
+      ...input, locationId: "cms620jzf000tla049cc6msxv",
+    }).catch((e: Error) => e);
+    expect(String(err)).toMatch(/looks like an Assistable subaccount id/);
+    expect(String(err)).toMatch(/Business Profile/);
+    expect(String(err)).not.toMatch(/SWAPPED/);
+  });
+  it("a real 20-char GHL location id never trips the cuid check, even lowercase-ish", async () => {
+    const { ctx } = deps();
+    // Genuine GHL shape: 20 chars, mixed case — must provision normally.
+    const r = await provisionTenant(ctx as never, { ...input, locationId: "0moc3i2CepQ36yVHFE12" });
+    expect(r.tenant.token).toBeTruthy();
   });
   it("still accepts a subAccountId that legitimately differs from the location", async () => {
     const { ctx } = deps();

@@ -75,19 +75,33 @@ describe("ghl client", () => {
     const ghl = createGhlClient({ baseUrl: "https://g", pit: "P", fetchImpl: impl });
     expect(await ghl.latestMediaMessages({ locationId: "L", contactId: "C" })).toEqual([]);
   });
-  it("validatePit returns true when search route responds 200", async () => {
+  it("validatePit passes when search route responds 200", async () => {
     const { impl } = fakeFetch({ "/conversations/search": { conversations: [] } });
     const ghl = createGhlClient({ baseUrl: "https://g", pit: "L", fetchImpl: impl });
-    expect(await ghl.validatePit("L")).toBe(true);
+    expect(await ghl.validatePit("L")).toEqual({ ok: true });
   });
-  it("validatePit returns false when search route responds 401", async () => {
-    const impl = (async () => new Response("{}", { status: 401 })) as typeof fetch;
+  it("validatePit reports the status and GHL's error body on a 401", async () => {
+    const impl = (async () =>
+      new Response(JSON.stringify({ message: "Invalid JWT", statusCode: 401 }), { status: 401 })
+    ) as typeof fetch;
     const ghl = createGhlClient({ baseUrl: "https://g", pit: "bad", fetchImpl: impl });
-    expect(await ghl.validatePit("L")).toBe(false);
+    expect(await ghl.validatePit("L")).toEqual({ ok: false, status: 401, detail: "Invalid JWT" });
   });
-  it("validatePit returns false when fetchImpl throws", async () => {
+  it("validatePit joins array-shaped GHL messages and omits detail when the body has none", async () => {
+    const arr = (async () =>
+      new Response(JSON.stringify({ message: ["locationId must be a string", "bad request"] }), { status: 400 })
+    ) as typeof fetch;
+    const ghl = createGhlClient({ baseUrl: "https://g", pit: "P", fetchImpl: arr });
+    expect(await ghl.validatePit("L")).toEqual({
+      ok: false, status: 400, detail: "locationId must be a string; bad request",
+    });
+    const empty = (async () => new Response("{}", { status: 403 })) as typeof fetch;
+    const ghl2 = createGhlClient({ baseUrl: "https://g", pit: "P", fetchImpl: empty });
+    expect(await ghl2.validatePit("L")).toEqual({ ok: false, status: 403 });
+  });
+  it("validatePit reports a network failure without a status", async () => {
     const impl = (async () => { throw new Error("net"); }) as typeof fetch;
     const ghl = createGhlClient({ baseUrl: "https://g", pit: "P", fetchImpl: impl });
-    expect(await ghl.validatePit("L")).toBe(false);
+    expect(await ghl.validatePit("L")).toEqual({ ok: false, detail: "network error" });
   });
 });

@@ -35,7 +35,10 @@ function makeCtx(opts: {
     ghlFactory: (pit: string) => {
       seenPits.push(pit);
       return {
-        validatePit: async (locationId: string) => !(opts.failPitFor ?? []).includes(locationId),
+        validatePit: async (locationId: string) =>
+          (opts.failPitFor ?? []).includes(locationId)
+            ? { ok: false as const, status: 401 }
+            : { ok: true as const },
       };
     },
     providerFactory: () => ({

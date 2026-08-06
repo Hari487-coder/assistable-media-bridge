@@ -35,7 +35,7 @@ function makeApp(opts: {
       },
       updateToolUrl: async () => ({ ok: true }),
     }) as never,
-    ghlFactory: () => ({ validatePit: async () => true }) as never,
+    ghlFactory: () => ({ validatePit: async () => ({ ok: true as const }) }) as never,
     providerFactory: () => ({ validateKey: async () => ({ ok: true as const }), describe: async () => "" }),
   }));
   return { app, tenants, events, assigns };

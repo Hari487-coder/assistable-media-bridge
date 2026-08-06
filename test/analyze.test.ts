@@ -21,7 +21,7 @@ function deps(overrides: Partial<Record<string, unknown>> = {}) {
       latestMediaMessages: async () => [
         { id: "g2", attachments: ["https://storage.msgsndr.com/a.ogg"], direction: "inbound", dateAdded: "t2" },
       ],
-      validatePit: async () => true,
+      validatePit: async () => ({ ok: true as const }),
     },
     processed: createProcessedStore(db),
     events: createEventStore(db),
@@ -68,7 +68,7 @@ describe("analyzeForContact", () => {
         { id: "gA", attachments: ["https://storage.msgsndr.com/1.ogg", "https://storage.msgsndr.com/2.ogg", "https://storage.msgsndr.com/3.ogg", "https://storage.msgsndr.com/4.ogg"], direction: "inbound", dateAdded: "t2" },
         { id: "gB", attachments: ["https://storage.msgsndr.com/5.ogg", "https://storage.msgsndr.com/6.ogg"], direction: "inbound", dateAdded: "t1" },
       ],
-      validatePit: async () => true,
+      validatePit: async () => ({ ok: true as const }),
     } });
     const r = await analyzeForContact(d as never, tenant, "C1");
     const noteMatches = r.text.match(/additional attachment\(s\) were not processed/g) ?? [];
@@ -89,7 +89,7 @@ describe("analyzeForContact", () => {
           { id: "gImg", attachments: ["https://storage.msgsndr.com/photo.png"], direction: "inbound", dateAdded: "t3" },
           { id: "gVoice", attachments: ["https://storage.msgsndr.com/note.ogg"], direction: "inbound", dateAdded: "t2" },
         ],
-        validatePit: async () => true,
+        validatePit: async () => ({ ok: true as const }),
       },
       provider: {
         describe: async (i: { kind: string; mime: string }) => {
@@ -114,7 +114,7 @@ describe("analyzeForContact", () => {
       latestMediaMessages: async () => [
         { id: "gX", attachments: ["https://mms.example-cdn.com/media/abc?sig=SECRET"], direction: "inbound", dateAdded: "t1" },
       ],
-      validatePit: async () => true,
+      validatePit: async () => ({ ok: true as const }),
     } });
     const r = await analyzeForContact(d as never, tenant, "C1");
     expect(r.text).toContain("disallowed_host");
@@ -127,7 +127,7 @@ describe("analyzeForContact", () => {
       latestMediaMessages: async () => [
         { id: "gEmpty", attachments: [], direction: "inbound", dateAdded: "t1" },
       ],
-      validatePit: async () => true,
+      validatePit: async () => ({ ok: true as const }),
     } });
     const r = await analyzeForContact(d as never, tenant, "C1");
     expect(r.text).toContain("no new attachments");

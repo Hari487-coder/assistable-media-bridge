@@ -93,6 +93,45 @@ export async function ensureTool(
   return { toolId, warnings };
 }
 
+/** Assistable ids are cuids: "c" + ~24 lowercase alphanumerics. GHL location
+ *  IDs are ~20 mixed-case characters, so requiring 21+ lowercase chars can
+ *  never match a real location id — only a pasted-in-the-wrong-column cuid. */
+const CUID_SHAPE = /^c[a-z0-9]{20,}$/;
+
+/**
+ * Translate a failed PIT probe into the exact upstream response plus the fix
+ * for THAT failure. One generic sentence here sent a live tester re-minting
+ * tokens when the actual problem was the location id — 401, 403 and 400 are
+ * three different mistakes with three different fixes.
+ */
+function pitFailureMessage(
+  check: { status?: number; detail?: string }, locationId: string
+): string {
+  const upstream = check.status
+    ? `GHL answered HTTP ${check.status}${check.detail ? ` — "${check.detail}"` : ""}`
+    : `GHL could not be reached (${check.detail ?? "network error"})`;
+  if (check.status === 401) {
+    return `the GHL Private Integration Token was rejected (${upstream}). The token itself is invalid — ` +
+      "it was mistyped, truncated, rotated, or deleted. In the CRM go to Settings → Private Integrations " +
+      "and copy the full token again";
+  }
+  if (check.status === 403) {
+    return `the GHL Private Integration Token is valid but not allowed to read conversations for location ${locationId} (${upstream}). ` +
+      "Either it is missing the \"View Conversations\" scope, or it was created in a DIFFERENT subaccount — " +
+      "a Private Integration token only works inside the subaccount it was created in";
+  }
+  if (check.status === 400 || check.status === 404 || check.status === 422) {
+    return `GHL does not recognise ${locationId} as a location this token can query (${upstream}). ` +
+      "The GHL Location ID is probably wrong — copy it from the CRM under Settings → Business Profile";
+  }
+  if (!check.status) {
+    return `could not validate the GHL Private Integration Token: ${upstream}. ` +
+      "This is a connectivity problem, not necessarily a bad credential — re-submit in a minute";
+  }
+  return `GHL failed the Private Integration Token check (${upstream}). ` +
+    "This looks temporary on GHL's side — re-submit in a minute";
+}
+
 export async function provisionTenant(deps: ProvisionDeps, input: TenantInput) {
   // Cheapest possible check, before a single network call. The Assistable
   // subaccount id and the GHL location id are two DIFFERENT fields on the same
@@ -111,6 +150,18 @@ export async function provisionTenant(deps: ProvisionDeps, input: TenantInput) {
       "the location id comes from the CRM"
     );
   }
+  // Same family of paste mistake, swapped instead of duplicated: an Assistable
+  // cuid in the location column. Left to run, the PIT probe asks GHL about a
+  // location that does not exist and the failure blames the token — seen live,
+  // it sent the operator re-minting tokens instead of swapping two values.
+  if (CUID_SHAPE.test(input.locationId)) {
+    throw new Error(
+      `"${input.locationId}" looks like an Assistable subaccount id (a long lowercase id starting with "c"), not a GHL location ID. ` +
+      (input.subAccountId && !CUID_SHAPE.test(input.subAccountId)
+        ? `The Subaccount and Location values appear SWAPPED — the order is: subaccount id first, GHL location ID second. Swap the two and re-submit`
+        : "The GHL Location ID is ~20 mixed-case characters, copied from the CRM under Settings → Business Profile")
+    );
+  }
 
   const v3 = deps.v3Factory(input.v3Key, input.subAccountId);
 
@@ -121,8 +172,9 @@ export async function provisionTenant(deps: ProvisionDeps, input: TenantInput) {
       `Assistable v3 API key failed validation${v3Check.detail ? ` — ${v3Check.detail}` : ""}`
     );
   }
-  if (!(await deps.ghlFactory(input.ghlPit).validatePit(input.locationId))) {
-    throw new Error("GHL Private Integration Token failed validation for this location");
+  const pitCheck = await deps.ghlFactory(input.ghlPit).validatePit(input.locationId);
+  if (!pitCheck.ok) {
+    throw new Error(pitFailureMessage(pitCheck, input.locationId));
   }
   const providerCheck = await deps.providerFactory(input.provider, input.aiKey).validateKey();
   if (!providerCheck.ok) {
