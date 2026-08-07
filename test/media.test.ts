@@ -88,6 +88,20 @@ describe("downloadMedia", () => {
     });
     expect(spoof).toEqual({ error: "disallowed_host" });
   });
+  it("keeps an unattributable 'internal-looking' host blocked — naming it in a trace is not a reason to trust it", async () => {
+    // Live 2026-08-07: this host arrived as an Instagram attachment URL. It is
+    // not Meta's, not GHL's, not Assistable's — a cheap-TLD, Cloudflare-fronted
+    // domain with a DV-only cert, named to read as internal infrastructure.
+    // The allowlist is the only gate between an inbound message and a fetch
+    // from our server, so this stays blocked until someone attributes it.
+    let fetched = false;
+    const spy = (async () => { fetched = true; return new Response(""); }) as unknown as typeof fetch;
+    const r = await downloadMedia(
+      "https://static-assets.internal.usercontent.site/ig/asset.mp4", { fetchImpl: spy }
+    );
+    expect(r).toEqual({ error: "disallowed_host" });
+    expect(fetched).toBe(false);
+  });
   it("downloads from GHL CDN and enforces cap", async () => {
     const r = await downloadMedia("https://storage.msgsndr.com/x.ogg", { fetchImpl: ok(new Uint8Array(10)) });
     expect("bytes" in r && r.bytes.length).toBe(10);

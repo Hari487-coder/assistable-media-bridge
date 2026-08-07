@@ -7,7 +7,17 @@
 // records, not from contact-controlled text.
 //
 // A missing entry is a SILENT channel outage, so the failure note names the
-// blocked host (see analyze.ts) — the trace tells you what to add here.
+// blocked host (see analyze.ts). That name is a LEAD, NOT AN INSTRUCTION.
+// Attachment URLs ride in on inbound messages, so a blocked host is just as
+// likely to be an attacker's as a channel's, and this list is the only thing
+// standing between an inbound message and a fetch from our server. Live on
+// 2026-08-07 the blocked host was `static-assets.internal.usercontent.site`:
+// a cheap-TLD domain, Cloudflare-fronted, domain-validated cert with no
+// organization, named to read as internal infrastructure, and matching
+// nothing in the Assistable or GHL estate. It was NOT added.
+//
+// Add a host only after attributing it to the channel operator through their
+// own documentation or support — never because it appeared in a trace.
 const ALLOWED_SUFFIXES = [
   "leadconnectorhq.com",
   "msgsndr.com",
