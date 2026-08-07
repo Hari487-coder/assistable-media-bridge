@@ -71,6 +71,23 @@ describe("downloadMedia", () => {
     const other = await downloadMedia("https://compute.googleapis.com/x", { fetchImpl: ok(new Uint8Array(1)) });
     expect(other).toEqual({ error: "disallowed_host" });
   });
+  it("allows Meta's CDN — Instagram/Messenger attachments are not rehosted by GHL", async () => {
+    // Live: an Instagram voice note reached the tool and died on
+    // disallowed_host with the whole rest of the pipeline working.
+    for (const url of [
+      "https://lookaside.fbsbx.com/ig_messaging_cdn/?asset_id=123",
+      "https://scontent.cdninstagram.com/v/t1/audio.mp4",
+      "https://video-lhr8-1.xx.fbcdn.net/v/t42/clip.mp4",
+    ]) {
+      const r = await downloadMedia(url, { fetchImpl: ok(new Uint8Array(7)) });
+      expect("bytes" in r && r.bytes.length, url).toBe(7);
+    }
+    // Lookalike domains must still fail closed — suffix match, not substring.
+    const spoof = await downloadMedia("https://fbcdn.net.evil.example.com/x", {
+      fetchImpl: ok(new Uint8Array(1)),
+    });
+    expect(spoof).toEqual({ error: "disallowed_host" });
+  });
   it("downloads from GHL CDN and enforces cap", async () => {
     const r = await downloadMedia("https://storage.msgsndr.com/x.ogg", { fetchImpl: ok(new Uint8Array(10)) });
     expect("bytes" in r && r.bytes.length).toBe(10);

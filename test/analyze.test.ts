@@ -186,6 +186,33 @@ describe("analyzeForContact", () => {
     expect(r.text).toContain("🎤 Voice note transcript: ich will fünf Kilo abnehmen");
     expect(r.text).not.toContain("🎬 Video");
   });
+  it("an unreadable attachment names the host and forbids the model from covering for it", async () => {
+    // Live trace: the tool returned a bare "[attachment could not be read:
+    // disallowed_host]" and the bot opened its reply with "Ich hab dein Video
+    // gesehen" — it claimed to have seen a file it never downloaded. The note
+    // must name WHICH host (so the trace self-diagnoses) and forbid the claim.
+    const d = deps({ ghl: {
+      latestMediaMessages: async () => [
+        { id: "gIg", attachments: ["https://lookaside.fbsbx.com/ig_messaging_cdn/?asset_id=9&sig=SECRET"], direction: "inbound", dateAdded: "t1" },
+      ],
+      validatePit: async () => ({ ok: true as const }),
+    }, fetchImpl: (async () => { throw new Error("should not fetch"); }) as unknown as typeof fetch });
+    // Force the blocked path by pointing at a host that is not allowlisted.
+    const blocked = deps({ ghl: {
+      latestMediaMessages: async () => [
+        { id: "gX", attachments: ["https://unknown-cdn.example.com/a.mp4?sig=SECRET"], direction: "inbound", dateAdded: "t1" },
+      ],
+      validatePit: async () => ({ ok: true as const }),
+    } });
+    const r = await analyzeForContact(blocked as never, tenant, "C1");
+    expect(r.text).toContain("disallowed_host");
+    expect(r.text).toContain("unknown-cdn.example.com"); // the fix is now readable off the trace
+    expect(r.text).not.toContain("SECRET");             // never the signed URL
+    expect(r.text).toMatch(/did NOT see or hear/);
+    expect(r.text).toMatch(/never guess what it contained/);
+    // Meta's CDN is allowlisted now, so that one gets fetched, not blocked.
+    await expect(analyzeForContact(d as never, tenant, "C1")).resolves.toBeTruthy();
+  });
   it("a disallowed attachment host records the blocked hostname, never the full URL", async () => {
     const d = deps({ ghl: {
       latestMediaMessages: async () => [

@@ -17,6 +17,30 @@ export interface AnalyzeDeps {
 const LABELS = { audio: "🎤 Voice note transcript", image: "📷 Image", video: "🎬 Video", pdf: "📄 Document" } as const;
 const MAX_ATTACHMENTS = 3;
 
+/**
+ * What the assistant is told when an attachment could not be read.
+ *
+ * Two jobs, both learned from one live trace. Name the cause precisely enough
+ * that the trace diagnoses itself — a bare "disallowed_host" says a host was
+ * blocked but not WHICH, turning a one-line allowlist fix into a dashboard
+ * dig. And forbid the model from covering for the failure: answering that
+ * same failed read, a live bot opened with "Ich hab dein Video gesehen"
+ * ("I've seen your video") and then guessed the topic, which is exactly the
+ * confident-but-blind reply this bridge exists to prevent.
+ */
+function unreadableNote(reason: string, detail?: string): string {
+  return `[attachment could not be read: ${reason}${detail ? ` (${detail})` : ""}. ` +
+    "You did NOT see or hear this attachment. Never claim or imply that you did, and never guess what it contained. " +
+    "Tell the contact you could not open it, and ask them to describe it or send it again.]";
+}
+
+/** Same honesty guard for a deliberately disabled modality. */
+function disabledNote(what: string): string {
+  return `[${what} processing is disabled for this account. ` +
+    "You did NOT see or hear this attachment — do not claim or imply that you did. " +
+    `Tell the contact you cannot open ${what} messages and ask them to describe it in text.]`;
+}
+
 export async function analyzeForContact(
   deps: AnalyzeDeps, tenant: Tenant, contactId: string
 ): Promise<{ text: string; processedIds: string[] }> {
@@ -59,35 +83,36 @@ export async function analyzeForContact(
       try {
         const dl = await downloadMedia(url, { fetchImpl: deps.fetchImpl });
         if ("error" in dl) {
+          // The HOST, never the full URL — attachment URLs can carry signed
+          // tokens. It goes in both the event feed AND the note the assistant
+          // gets, so a new channel's CDN names itself in the trace instead of
+          // needing a dashboard dig for a one-line allowlist fix.
+          let host = "unparseable-url";
+          try { host = new URL(url).hostname; } catch { /* keep placeholder */ }
           if (dl.error === "disallowed_host") {
-            // Record the blocked HOST (never the full URL — attachment URLs
-            // can carry signed tokens) so the allowlist gap is readable off
-            // the dashboard instead of needing a DB dig for the message row.
-            let host = "unparseable-url";
-            try { host = new URL(url).hostname; } catch { /* keep placeholder */ }
             deps.events.record(tenant.id, "tool_skip", `blocked attachment host: ${host}`);
           }
-          sections.push(`[attachment could not be read: ${dl.error}]`);
+          sections.push(unreadableNote(dl.error, host));
           continue;
         }
         const s = sniff(dl.bytes);
         if (s.kind === "unknown") {
-          sections.push("[attachment could not be read: unsupported_type]");
+          sections.push(unreadableNote("unsupported_type"));
           continue;
         }
         if (s.kind === "audio" && !tenant.modalities.audio) {
-          sections.push("[audio processing is disabled for this account]");
+          sections.push(disabledNote("audio"));
           continue;
         }
         if (s.kind === "image" && !tenant.modalities.image) {
-          sections.push("[image processing is disabled for this account]");
+          sections.push(disabledNote("image"));
           continue;
         }
         // Video rides the image toggle — one switch for the visual channel. A
         // tenant that turned images off to control provider cost must not have
         // the far more expensive video slip through on a separate flag.
         if (s.kind === "video" && !tenant.modalities.image) {
-          sections.push("[video processing is disabled for this account]");
+          sections.push(disabledNote("video"));
           continue;
         }
         const text = await deps.provider.describe({
@@ -100,7 +125,7 @@ export async function analyzeForContact(
         // of analyzeForContact — every failure degrades to a bracketed note.
         const reason = err instanceof Error ? err.message : "processing_error";
         deps.events.record(tenant.id, "error", `tool attachment failed: ${reason} (msg ${msg.id})`);
-        sections.push(`[attachment could not be read: ${reason}]`);
+        sections.push(unreadableNote(reason));
       }
     }
   }

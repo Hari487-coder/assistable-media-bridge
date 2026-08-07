@@ -1,13 +1,22 @@
-// storage.googleapis.com: GHL rehosts inbound SMS/MMS media on GCS (observed
-// live 2026-07-30 — every MMS attachment URL pointed there). Allowing it does
-// not weaken the SSRF posture: the allowlist exists to stop fetches into
-// private/internal endpoints, and GCS is public object storage. Attachment
-// URLs come from GHL's own message records, not from contact-controlled text.
+// One entry per channel whose media GHL does NOT rehost itself, added as each
+// channel goes live: GCS for SMS/MMS (2026-07-30), Meta's CDN for Instagram
+// and Messenger (2026-08-07 — an Instagram voice note failed disallowed_host
+// with the whole rest of the pipeline working). Allowing public object storage
+// does not weaken the SSRF posture: the allowlist exists to stop fetches into
+// private/internal endpoints, and attachment URLs come from GHL's own message
+// records, not from contact-controlled text.
+//
+// A missing entry is a SILENT channel outage, so the failure note names the
+// blocked host (see analyze.ts) — the trace tells you what to add here.
 const ALLOWED_SUFFIXES = [
   "leadconnectorhq.com",
   "msgsndr.com",
   "assistable.ai",
   "storage.googleapis.com",
+  // Meta — Instagram DMs and Facebook Messenger.
+  "cdninstagram.com",
+  "fbcdn.net",
+  "fbsbx.com",
 ];
 const DEFAULT_MAX_BYTES = 25 * 1024 * 1024;
 
