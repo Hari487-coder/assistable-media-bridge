@@ -2,7 +2,7 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import { Router } from "express";
 import { z } from "zod";
-import { downloadMedia } from "../media/download";
+import { type LookupFn, downloadMedia } from "../media/download";
 import { sniff } from "../media/sniff";
 import type { MediaProvider } from "../providers";
 import type { EventStore } from "../store/events";
@@ -13,6 +13,8 @@ export interface McpRouterCtx {
   events: EventStore;
   providerFactory: (tenant: Tenant) => MediaProvider;
   mediaFetch?: typeof fetch;
+  /** Injected only by tests, so unit runs never perform real DNS. */
+  mediaLookup?: LookupFn;
 }
 
 const text = (t: string) => ({ content: [{ type: "text" as const, text: t }] });
@@ -25,7 +27,9 @@ function buildServer(ctx: McpRouterCtx, tenant: Tenant): McpServer {
   const fetchAndSniff = async (
     url: string
   ): Promise<{ error: string } | { bytes: Uint8Array; sniffed: ReturnType<typeof sniff> }> => {
-    const dl = await downloadMedia(url, { fetchImpl: ctx.mediaFetch });
+    const dl = await downloadMedia(url, {
+      fetchImpl: ctx.mediaFetch, lookupImpl: ctx.mediaLookup,
+    });
     if ("error" in dl) return { error: `download failed: ${dl.error}` };
     return { bytes: dl.bytes, sniffed: sniff(dl.bytes) };
   };

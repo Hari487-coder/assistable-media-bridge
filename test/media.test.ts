@@ -55,20 +55,23 @@ describe("sniff", () => {
 
 describe("downloadMedia", () => {
   const ok = (body: Uint8Array) => (async () => new Response(body as any)) as unknown as typeof fetch;
+  // Unit runs must never depend on real DNS: every allowlisted host resolves
+  // to a public address unless a test says otherwise.
+  const publicLookup = async () => [{ address: "93.184.216.34", family: 4 }];
   it("rejects non-allowlisted hosts without fetching", async () => {
     let fetched = false;
     const spy = (async () => { fetched = true; return new Response(""); }) as unknown as typeof fetch;
-    const r = await downloadMedia("https://evil.example.com/a.ogg", { fetchImpl: spy });
+    const r = await downloadMedia("https://evil.example.com/a.ogg", { fetchImpl: spy, lookupImpl: publicLookup });
     expect(r).toEqual({ error: "disallowed_host" });
     expect(fetched).toBe(false);
   });
   it("allows GCS — GHL rehosts SMS/MMS media on storage.googleapis.com", async () => {
     const r = await downloadMedia("https://storage.googleapis.com/some-ghl-bucket/img.jpg", {
-      fetchImpl: ok(new Uint8Array(5)),
+      fetchImpl: ok(new Uint8Array(5)), lookupImpl: publicLookup,
     });
     expect("bytes" in r && r.bytes.length).toBe(5);
     // googleapis.com in general stays blocked — only the storage host is trusted.
-    const other = await downloadMedia("https://compute.googleapis.com/x", { fetchImpl: ok(new Uint8Array(1)) });
+    const other = await downloadMedia("https://compute.googleapis.com/x", { fetchImpl: ok(new Uint8Array(1)), lookupImpl: publicLookup });
     expect(other).toEqual({ error: "disallowed_host" });
   });
   it("allows Meta's CDN — Instagram/Messenger attachments are not rehosted by GHL", async () => {
@@ -79,34 +82,77 @@ describe("downloadMedia", () => {
       "https://scontent.cdninstagram.com/v/t1/audio.mp4",
       "https://video-lhr8-1.xx.fbcdn.net/v/t42/clip.mp4",
     ]) {
-      const r = await downloadMedia(url, { fetchImpl: ok(new Uint8Array(7)) });
+      const r = await downloadMedia(url, { fetchImpl: ok(new Uint8Array(7)), lookupImpl: publicLookup });
       expect("bytes" in r && r.bytes.length, url).toBe(7);
     }
     // Lookalike domains must still fail closed — suffix match, not substring.
     const spoof = await downloadMedia("https://fbcdn.net.evil.example.com/x", {
-      fetchImpl: ok(new Uint8Array(1)),
+      fetchImpl: ok(new Uint8Array(1)), lookupImpl: publicLookup,
     });
     expect(spoof).toEqual({ error: "disallowed_host" });
   });
-  it("keeps an unattributable 'internal-looking' host blocked — naming it in a trace is not a reason to trust it", async () => {
-    // Live 2026-08-07: this host arrived as an Instagram attachment URL. It is
-    // not Meta's, not GHL's, not Assistable's — a cheap-TLD, Cloudflare-fronted
-    // domain with a DV-only cert, named to read as internal infrastructure.
-    // The allowlist is the only gate between an inbound message and a fetch
-    // from our server, so this stays blocked until someone attributes it.
-    let fetched = false;
-    const spy = (async () => { fetched = true; return new Response(""); }) as unknown as typeof fetch;
+  it("allows the Instagram media host, scoped to the internal. subtree only", async () => {
+    // Live 2026-08-07: GHL returns Instagram media from this host. Unconfirmed
+    // by GHL, so the entry is deliberately narrow — the asset subtree is
+    // trusted, the apex and its email/marketing hosts are not.
     const r = await downloadMedia(
-      "https://static-assets.internal.usercontent.site/ig/asset.mp4", { fetchImpl: spy }
+      "https://static-assets.internal.usercontent.site/ig/asset.mp4",
+      { fetchImpl: ok(new Uint8Array(4)), lookupImpl: publicLookup }
     );
+    expect("bytes" in r && r.bytes.length).toBe(4);
+    for (const blocked of [
+      "https://usercontent.site/x",
+      "https://email.email.usercontent.site/x",
+      "https://internal.usercontent.site.evil.example.com/x",
+    ]) {
+      const b = await downloadMedia(blocked, { fetchImpl: ok(new Uint8Array(1)), lookupImpl: publicLookup });
+      expect(b, blocked).toEqual({ error: "disallowed_host" });
+    }
+  });
+  it("refuses a trusted NAME that resolves inward — the backstop for a wrongly-trusted host", async () => {
+    // The allowlist trusts whole domains including subdomains, so it cannot see
+    // where a name points. Cloud metadata, loopback and the private ranges must
+    // be unreachable even from an allowlisted host.
+    for (const addr of [
+      "169.254.169.254", "127.0.0.1", "10.1.2.3", "172.16.0.1", "172.31.255.255",
+      "192.168.1.1", "100.64.0.1", "0.0.0.0", "224.0.0.1",
+    ]) {
+      let fetched = false;
+      const spy = (async () => { fetched = true; return new Response(""); }) as unknown as typeof fetch;
+      const r = await downloadMedia("https://storage.msgsndr.com/x.ogg", {
+        fetchImpl: spy, lookupImpl: async () => [{ address: addr, family: 4 }],
+      });
+      expect(r, addr).toEqual({ error: "private_address" });
+      expect(fetched, addr).toBe(false);
+    }
+    // IPv6 loopback/link-local/ULA, and the IPv4-mapped form of metadata.
+    for (const [addr, family] of [["::1", 6], ["fe80::1", 6], ["fd00::1", 6], ["::ffff:169.254.169.254", 6]] as const) {
+      const r = await downloadMedia("https://storage.msgsndr.com/x.ogg", {
+        fetchImpl: ok(new Uint8Array(1)), lookupImpl: async () => [{ address: addr, family }],
+      });
+      expect(r, addr).toEqual({ error: "private_address" });
+    }
+    // One private address among several is still a refusal — no cherry-picking.
+    const mixed = await downloadMedia("https://storage.msgsndr.com/x.ogg", {
+      fetchImpl: ok(new Uint8Array(1)),
+      lookupImpl: async () => [{ address: "93.184.216.34", family: 4 }, { address: "10.0.0.5", family: 4 }],
+    });
+    expect(mixed).toEqual({ error: "private_address" });
+    // A host that resolves to nothing is refused rather than handed to fetch.
+    const empty = await downloadMedia("https://storage.msgsndr.com/x.ogg", {
+      fetchImpl: ok(new Uint8Array(1)), lookupImpl: async () => [],
+    });
+    expect(empty).toEqual({ error: "private_address" });
+  });
+  it("rejects non-http(s) schemes before resolving anything", async () => {
+    const r = await downloadMedia("file:///etc/passwd", { fetchImpl: ok(new Uint8Array(1)), lookupImpl: publicLookup });
     expect(r).toEqual({ error: "disallowed_host" });
-    expect(fetched).toBe(false);
   });
   it("downloads from GHL CDN and enforces cap", async () => {
-    const r = await downloadMedia("https://storage.msgsndr.com/x.ogg", { fetchImpl: ok(new Uint8Array(10)) });
+    const r = await downloadMedia("https://storage.msgsndr.com/x.ogg", { fetchImpl: ok(new Uint8Array(10)), lookupImpl: publicLookup });
     expect("bytes" in r && r.bytes.length).toBe(10);
     const big = await downloadMedia("https://storage.msgsndr.com/x.ogg", {
-      fetchImpl: ok(new Uint8Array(50)), maxBytes: 40,
+      fetchImpl: ok(new Uint8Array(50)), maxBytes: 40, lookupImpl: publicLookup,
     });
     expect(big).toEqual({ error: "too_large" });
   });
@@ -116,7 +162,7 @@ describe("downloadMedia", () => {
       redirectMode = init?.redirect;
       return new Response(null, { status: 302, headers: { location: "https://evil.example.com/x" } });
     }) as unknown as typeof fetch;
-    const r = await downloadMedia("https://storage.msgsndr.com/x.ogg", { fetchImpl: impl });
+    const r = await downloadMedia("https://storage.msgsndr.com/x.ogg", { fetchImpl: impl, lookupImpl: publicLookup });
     expect(r).toEqual({ error: "fetch_failed" });
     expect(redirectMode).toBe("manual");
   });
@@ -126,7 +172,7 @@ describe("downloadMedia", () => {
     const impl = (async () =>
       new Response(new Uint8Array(10), { status: 200, headers: { "content-length": "999999999" } })
     ) as unknown as typeof fetch;
-    const r = await downloadMedia("https://storage.msgsndr.com/x.ogg", { fetchImpl: impl, maxBytes: 100 });
+    const r = await downloadMedia("https://storage.msgsndr.com/x.ogg", { fetchImpl: impl, maxBytes: 100, lookupImpl: publicLookup });
     expect(r).toEqual({ error: "too_large" });
   });
 });

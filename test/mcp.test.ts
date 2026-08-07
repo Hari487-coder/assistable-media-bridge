@@ -23,6 +23,7 @@ function makeApp() {
     events,
     providerFactory: () => ({ describe: async () => "transcript!", validateKey: async () => ({ ok: true as const }) }),
     mediaFetch: (async () => new Response(oggBytes)) as unknown as typeof fetch,
+    mediaLookup: async () => [{ address: "93.184.216.34", family: 4 }],
   }));
   return { app, token: t.token, tenants, events };
 }
@@ -148,6 +149,7 @@ describe("mcp endpoint — per-tenant analysis instruction", () => {
         validateKey: async () => ({ ok: true as const }),
       }),
       mediaFetch: (async () => new Response(oggBytes)) as unknown as typeof fetch,
+      mediaLookup: async () => [{ address: "93.184.216.34", family: 4 }],
     }));
 
     await request(app)

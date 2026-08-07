@@ -42,6 +42,8 @@ export function createMockState() {
       validateKey: async () => ({ ok: true as const }),
     }),
     mediaFetch: (async () => new Response(OGG)) as unknown as typeof fetch,
+    // Public address: the mock exercises the happy path, not the SSRF backstop.
+    mediaLookup: async () => [{ address: "93.184.216.34", family: 4 }],
   };
 }
 export type MockState = ReturnType<typeof createMockState>;

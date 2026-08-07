@@ -30,6 +30,10 @@ export function buildApp(config: AppConfig) {
   const providerFor = (t: Tenant) =>
     mock ? mock.providerFactory() : getProvider(t.provider, t.aiKey);
   const mediaFetch = mock ? mock.mediaFetch : undefined;
+  // MOCK_MODE runs the whole loop with no network and no credentials, so the
+  // address check gets a stub resolver too — otherwise a mock run performs the
+  // one real DNS query left in the pipeline and fails wherever DNS is absent.
+  const mediaLookup = mock ? mock.mediaLookup : undefined;
 
   const app = express();
   app.use(express.json({ limit: "1mb" }));
@@ -37,9 +41,11 @@ export function buildApp(config: AppConfig) {
   app.get("/health", (_req, res) => { res.json({ ok: true, mock: config.mock }); });
   app.use(createToolRouter({
     tenants, processed, events,
-    ghlFactory: ghlFor, providerFactory: providerFor, mediaFetch,
+    ghlFactory: ghlFor, providerFactory: providerFor, mediaFetch, mediaLookup,
   }));
-  app.use(createMcpRouter({ tenants, events, providerFactory: providerFor, mediaFetch }));
+  app.use(createMcpRouter({
+    tenants, events, providerFactory: providerFor, mediaFetch, mediaLookup,
+  }));
   app.use(createPortalRouter({
     tenants, events, publicBaseUrl: config.publicBaseUrl,
     v3Factory: (key, subAccountId) => v3For(key, subAccountId),

@@ -38,6 +38,7 @@ function makeApp(overrides?: Partial<ToolRouterCtx>) {
       validateKey: async () => ({ ok: true as const }),
     }),
     mediaFetch: (async () => new Response(oggBytes)) as unknown as typeof fetch,
+    mediaLookup: async () => [{ address: "93.184.216.34", family: 4 }],
     ...overrides,
   }));
   return { app, token: t.token, tenants, events };

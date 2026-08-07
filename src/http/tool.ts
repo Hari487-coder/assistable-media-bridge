@@ -1,6 +1,7 @@
 import { Router } from "express";
 import type { GhlClient } from "../clients/ghl";
 import { analyzeForContact } from "../core/analyze";
+import type { LookupFn } from "../media/download";
 import type { MediaProvider } from "../providers";
 import type { EventStore } from "../store/events";
 import type { ProcessedStore } from "../store/processed";
@@ -11,6 +12,8 @@ export interface ToolRouterCtx {
   ghlFactory: (tenant: Tenant) => GhlClient;
   providerFactory: (tenant: Tenant) => MediaProvider;
   mediaFetch?: typeof fetch;
+  /** Injected only by tests, so unit runs never perform real DNS. */
+  mediaLookup?: LookupFn;
 }
 
 // Envelope per tool-proxy.service.ts: { args, meta_data, metadata, call }.
@@ -80,6 +83,7 @@ export function createToolRouter(ctx: ToolRouterCtx): Router {
               events: ctx.events,
               provider: ctx.providerFactory(tenant),
               fetchImpl: ctx.mediaFetch,
+              lookupImpl: ctx.mediaLookup,
             },
             tenant, contactId
           )

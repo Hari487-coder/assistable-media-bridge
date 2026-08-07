@@ -29,9 +29,14 @@ function mp4Bytes(brand: string, ...handlers: string[]) {
   return b;
 }
 
+// Every allowlisted host resolves to a public address here — unit runs must
+// never depend on real DNS. Private-address handling is covered in media.test.
+const publicLookup = async () => [{ address: "93.184.216.34", family: 4 }];
+
 function deps(overrides: Partial<Record<string, unknown>> = {}) {
   const db = openDb(":memory:");
   return {
+    lookupImpl: publicLookup,
     ghl: {
       latestMediaMessages: async () => [
         { id: "g2", attachments: ["https://storage.msgsndr.com/a.ogg"], direction: "inbound", dateAdded: "t2" },

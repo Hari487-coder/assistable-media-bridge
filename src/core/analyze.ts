@@ -1,5 +1,5 @@
 import type { GhlClient } from "../clients/ghl";
-import { downloadMedia } from "../media/download";
+import { type LookupFn, downloadMedia } from "../media/download";
 import { sniff } from "../media/sniff";
 import type { MediaProvider } from "../providers";
 import type { EventStore } from "../store/events";
@@ -12,6 +12,8 @@ export interface AnalyzeDeps {
   events: EventStore;
   provider: MediaProvider;
   fetchImpl?: typeof fetch;
+  /** Injected only by tests, so unit runs never perform real DNS. */
+  lookupImpl?: LookupFn;
 }
 
 const LABELS = { audio: "🎤 Voice note transcript", image: "📷 Image", video: "🎬 Video", pdf: "📄 Document" } as const;
@@ -81,7 +83,9 @@ export async function analyzeForContact(
       // attempted work and cost, not successes.
       count += 1;
       try {
-        const dl = await downloadMedia(url, { fetchImpl: deps.fetchImpl });
+        const dl = await downloadMedia(url, {
+          fetchImpl: deps.fetchImpl, lookupImpl: deps.lookupImpl,
+        });
         if ("error" in dl) {
           // The HOST, never the full URL — attachment URLs can carry signed
           // tokens. It goes in both the event feed AND the note the assistant
@@ -91,6 +95,12 @@ export async function analyzeForContact(
           try { host = new URL(url).hostname; } catch { /* keep placeholder */ }
           if (dl.error === "disallowed_host") {
             deps.events.record(tenant.id, "tool_skip", `blocked attachment host: ${host}`);
+          } else if (dl.error === "private_address") {
+            // A trusted NAME pointing at a private address is either an attack
+            // or a broken DNS record — never routine. Loud, not a skip.
+            deps.events.record(
+              tenant.id, "error", `attachment host resolved to a private address: ${host}`
+            );
           }
           sections.push(unreadableNote(dl.error, host));
           continue;
