@@ -14,7 +14,7 @@ export interface MediaProvider {
 export const PROMPTS = {
   audio: "Transcribe this voice message verbatim, in the language it was spoken — never translate it. Reply with ONLY the transcript text.",
   image: "Describe this image for a customer-support agent. Extract ALL visible text verbatim (OCR), then add a one-sentence description of what the image shows.",
-  video: "This is a video sent by a customer. Describe for a customer-support agent what the video shows, then transcribe any speech verbatim, in the language it was spoken — never translate it.",
+  video: "This is a video sent by a customer. Describe for a customer-support agent what the video shows, then transcribe any speech verbatim, in the language it was spoken — never translate it. If there is nothing meaningful to see (audio-only or a static frame), skip the description and reply as if it were a voice message: ONLY the verbatim transcript.",
   pdf: "Extract the full text of this document, then summarize it in 2 sentences.",
 } as const;
 

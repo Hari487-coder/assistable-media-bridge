@@ -13,20 +13,35 @@ describe("sniff", () => {
     expect(sniff(new TextEncoder().encode("ID3\x03tag")).mime).toBe("audio/mpeg");
     expect(sniff(bytes(1, 2, 3)).kind).toBe("unknown");
   });
-  it("splits the ftyp family by major brand: voice memos are audio, camera videos are video", () => {
-    // The live failure: an iPhone/WhatsApp video is an MP4 too, and calling it
-    // audio fed the tester's video to the model as a voice note.
-    const ftyp = (brand: string) => {
-      const b = new Uint8Array(16);
-      b.set(new TextEncoder().encode("ftyp"), 4);
-      b.set(new TextEncoder().encode(brand), 8);
+  it("classifies the ftyp family by its TRACKS, not its container brand", () => {
+    // Two live failures, opposite directions: an iPhone/WhatsApp camera video
+    // was fed to the model as a voice note (soundtrack only), and an Instagram
+    // VOICE NOTE — which arrives in a generic-brand MP4 video container — was
+    // treated as a video. The hdlr track handlers are the truth.
+    const enc = new TextEncoder();
+    const ftyp = (brand: string, ...handlers: string[]) => {
+      const b = new Uint8Array(16 + handlers.length * 20);
+      b.set(enc.encode("ftyp"), 4);
+      b.set(enc.encode(brand), 8);
+      // Minimal hdlr shape: tag, then handler type 12 bytes later.
+      handlers.forEach((h, i) => {
+        const at = 16 + i * 20;
+        b.set(enc.encode("hdlr"), at);
+        b.set(enc.encode(h), at + 12);
+      });
       return b;
     };
+    // M4A-brand voice memos short-circuit on the brand alone.
     expect(sniff(ftyp("M4A "))).toEqual({ kind: "audio", mime: "audio/mp4" });
+    // Instagram voice note: generic video brand, sound track only → audio.
+    expect(sniff(ftyp("isom", "soun"))).toEqual({ kind: "audio", mime: "audio/mp4" });
+    expect(sniff(ftyp("mp42", "soun"))).toEqual({ kind: "audio", mime: "audio/mp4" });
+    // Camera video: a vide track (with or without sound) → video.
+    expect(sniff(ftyp("isom", "vide", "soun"))).toEqual({ kind: "video", mime: "video/mp4" });
+    expect(sniff(ftyp("3gp4", "vide"))).toEqual({ kind: "video", mime: "video/3gpp" });
+    expect(sniff(ftyp("qt  ", "vide", "soun"))).toEqual({ kind: "video", mime: "video/quicktime" });
+    // No readable hdlr (truncated moov) → fall back to the brand's video call.
     expect(sniff(ftyp("isom"))).toEqual({ kind: "video", mime: "video/mp4" });
-    expect(sniff(ftyp("mp42"))).toEqual({ kind: "video", mime: "video/mp4" });
-    expect(sniff(ftyp("3gp4"))).toEqual({ kind: "video", mime: "video/3gpp" });
-    expect(sniff(ftyp("qt  "))).toEqual({ kind: "video", mime: "video/quicktime" });
   });
   it("detects webp vs wav (RIFF disambiguation)", () => {
     const webp = new Uint8Array(12);

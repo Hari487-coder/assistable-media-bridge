@@ -14,6 +14,21 @@ const tenant = {
 
 const oggBytes = new TextEncoder().encode("OggS....voicedata");
 
+// MP4-family fixture: ftyp brand + minimal hdlr boxes declaring the tracks
+// (handler type sits 12 bytes after the "hdlr" tag — matches sniff's scan).
+function mp4Bytes(brand: string, ...handlers: string[]) {
+  const enc = new TextEncoder();
+  const b = new Uint8Array(16 + handlers.length * 20);
+  b.set(enc.encode("ftyp"), 4);
+  b.set(enc.encode(brand), 8);
+  handlers.forEach((h, i) => {
+    const at = 16 + i * 20;
+    b.set(enc.encode("hdlr"), at);
+    b.set(enc.encode(h), at + 12);
+  });
+  return b;
+}
+
 function deps(overrides: Partial<Record<string, unknown>> = {}) {
   const db = openDb(":memory:");
   return {
@@ -113,9 +128,7 @@ describe("analyzeForContact", () => {
     // The live failure: MP4 videos were sniffed as audio, so the model only
     // heard the soundtrack and the assistant asked the contact what was in
     // their own video.
-    const mp4 = new Uint8Array(16);
-    mp4.set(new TextEncoder().encode("ftyp"), 4);
-    mp4.set(new TextEncoder().encode("isom"), 8);
+    const mp4 = mp4Bytes("isom", "vide", "soun");
     const seen: string[] = [];
     const d = deps({
       ghl: {
@@ -139,13 +152,39 @@ describe("analyzeForContact", () => {
     expect(r.text).not.toContain("Voice note transcript");
   });
   it("video rides the image modality toggle", async () => {
-    const mp4 = new Uint8Array(16);
-    mp4.set(new TextEncoder().encode("ftyp"), 4);
-    mp4.set(new TextEncoder().encode("isom"), 8);
+    const mp4 = mp4Bytes("isom", "vide");
     const d = deps({ fetchImpl: (async () => new Response(mp4)) as unknown as typeof fetch });
     const t2 = { ...tenant, modalities: { audio: true, image: false } };
     const r = await analyzeForContact(d as never, t2 as Tenant, "C1");
     expect(r.text).toContain("video processing is disabled");
+  });
+  it("an Instagram voice note (MP4 video container, sound track only) is treated as audio", async () => {
+    // Live tester, round two: Instagram delivers voice notes in a generic-brand
+    // MP4 video container — GHL even renders a play button. The bridge must
+    // look at the tracks, transcribe it as a voice note, and never make the
+    // assistant say "I've got a video of you".
+    const igVoice = mp4Bytes("isom", "soun");
+    const seen: string[] = [];
+    const d = deps({
+      ghl: {
+        latestMediaMessages: async () => [
+          { id: "gIg", attachments: ["https://storage.msgsndr.com/ig-voice.mp4"], direction: "inbound", dateAdded: "t1" },
+        ],
+        validatePit: async () => ({ ok: true as const }),
+      },
+      provider: {
+        describe: async (i: { kind: string; mime: string }) => {
+          seen.push(`${i.kind}:${i.mime}`);
+          return "ich will fünf Kilo abnehmen";
+        },
+        validateKey: async () => ({ ok: true as const }),
+      },
+      fetchImpl: (async () => new Response(igVoice)) as unknown as typeof fetch,
+    });
+    const r = await analyzeForContact(d as never, tenant, "C1");
+    expect(seen).toEqual(["audio:audio/mp4"]);
+    expect(r.text).toContain("🎤 Voice note transcript: ich will fünf Kilo abnehmen");
+    expect(r.text).not.toContain("🎬 Video");
   });
   it("a disallowed attachment host records the blocked hostname, never the full URL", async () => {
     const d = deps({ ghl: {
