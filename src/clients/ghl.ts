@@ -9,6 +9,7 @@ const DEFAULT_TIMEOUT_MS = 15_000;
 
 interface GhlMessage {
   id: string; direction?: string; attachments?: unknown; dateAdded?: string;
+  messageType?: string;
 }
 
 export function createGhlClient(opts: GhlClientOptions) {
@@ -142,20 +143,59 @@ export function createGhlClient(opts: GhlClientOptions) {
         return { ok: false, error: err instanceof Error ? err.message : "send failed" };
       }
     },
-    /** Which channel this contact is actually talking on. Defaults to SMS on
-     *  any doubt: a wrong-but-plausible channel is worse than the fallback,
-     *  and every account has SMS. */
+    /**
+     * Which channel this contact is actually talking on.
+     *
+     * Driven by the contact's own newest INBOUND message, across their top
+     * threads — NOT by the newest thread. Live failure that forced this: a
+     * contact conversing on SMS also had an email thread that an outbound
+     * marketing send had bumped to the top, so ranking by thread picked Email
+     * and GHL refused with "Cannot send email as ... has unsubscribed". The
+     * lead got nothing. Outbound traffic reflects what the business did; only
+     * inbound reflects where the contact actually is.
+     *
+     * Falls back, in order, to the newest outbound message on a sendable
+     * channel (a contact who has never written), then the thread's declared
+     * type, then SMS. A wrong-but-plausible channel is worse than the
+     * fallback, and every account has SMS.
+     */
     async latestConversationChannel(locationId: string, contactId: string): Promise<string> {
       try {
         const r = await get(
-          `/conversations/search?locationId=${encodeURIComponent(locationId)}&contactId=${encodeURIComponent(contactId)}&sortBy=last_message_date&sort=desc&limit=1`
+          `/conversations/search?locationId=${encodeURIComponent(locationId)}&contactId=${encodeURIComponent(contactId)}&sortBy=last_message_date&sort=desc`
         );
         if (!r.ok) return "SMS";
-        const convs = r.json?.conversations;
-        const first = (Array.isArray(convs) ? convs : [])[0] as
-          { lastMessageType?: string; type?: string } | undefined;
-        const raw = first?.lastMessageType ?? first?.type ?? "";
-        return CHANNEL_BY_GHL_TYPE[raw.toUpperCase()] ?? "SMS";
+        const convs = (Array.isArray(r.json?.conversations) ? r.json.conversations : []) as
+          Array<{ id: string; lastMessageType?: string; type?: string }>;
+        if (convs.length === 0) return "SMS";
+
+        let bestInbound: { at: string; channel: string } | null = null;
+        let bestAny: { at: string; channel: string } | null = null;
+        for (const conv of convs.slice(0, 3)) {
+          const msgsRes = await get(`/conversations/${conv.id}/messages`);
+          if (!msgsRes.ok) continue;
+          // GHL nests: { messages: { messages: [...] } } — tolerate both.
+          const outer = msgsRes.json?.messages as unknown;
+          const list = (Array.isArray(outer)
+            ? outer
+            : ((outer as { messages?: unknown[] } | null)?.messages ?? [])) as GhlMessage[];
+          for (const m of list) {
+            // Calls and TYPE_ACTIVITY_* rows cannot carry an attachment, so
+            // they must not decide the channel even when they are newest.
+            const channel = CHANNEL_BY_GHL_TYPE[(m.messageType ?? "").toUpperCase()];
+            if (!channel) continue;
+            const at = m.dateAdded ?? "";
+            if (!bestAny || at > bestAny.at) bestAny = { at, channel };
+            if ((m.direction ?? "").toLowerCase() === "inbound"
+              && (!bestInbound || at > bestInbound.at)) {
+              bestInbound = { at, channel };
+            }
+          }
+        }
+        if (bestInbound) return bestInbound.channel;
+        if (bestAny) return bestAny.channel;
+        const declared = convs[0]?.lastMessageType ?? convs[0]?.type ?? "";
+        return CHANNEL_BY_GHL_TYPE[declared.toUpperCase()] ?? "SMS";
       } catch {
         return "SMS";
       }

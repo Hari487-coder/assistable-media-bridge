@@ -112,7 +112,9 @@ export async function sendAssetForContact(
     return {
       text: note(
         `could not send "${asset.name}" (${result.error}). The contact did NOT receive it — ` +
-        "never claim or imply that you sent it. Continue in text, or offer to follow up."
+        "never claim or imply that you sent it. Do NOT offer to send it on a channel the error " +
+        "says is blocked, unsubscribed or invalid for this contact. Continue in text: give them " +
+        "the information in words if you can, or say a person will follow up."
       ),
     };
   }
