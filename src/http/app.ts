@@ -54,6 +54,7 @@ export function buildApp(config: AppConfig) {
   }));
   app.use(createPortalRouter({
     tenants, events, assets, publicBaseUrl: config.publicBaseUrl,
+    ...(mock ? { assetFetch: mock.assetFetch, assetLookup: mock.mediaLookup } : {}),
     v3Factory: (key, subAccountId) => v3For(key, subAccountId),
     ghlFactory: (pit) =>
       (mock ? mock.ghlFactory() : createGhlClient({ baseUrl: config.ghlBaseUrl, pit })),
@@ -69,7 +70,11 @@ export function buildApp(config: AppConfig) {
     app,
     wireDeps: {
       tenants, processed, events, wakerDepsFor,
-      mockV3State: mock ?? { wokenConversations: new Set<string>(), bumpConversation() { /* noop outside mock mode */ } },
+      mockV3State: mock ?? {
+        wokenConversations: new Set<string>(),
+        sentMessages: [] as Array<{ contactId: string; type: string; message?: string; attachments: string[] }>,
+        bumpConversation() { /* noop outside mock mode */ },
+      },
     },
   };
 }

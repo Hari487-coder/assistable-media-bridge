@@ -4,6 +4,8 @@ A Model Context Protocol service that connects Assistable v3 assistants to media
 
 When a contact sends a voice note, photo, video, or document via WhatsApp/SMS/email into GHL, the assistant can now read it—automatically waking and analyzing on detect, or on-demand through the tool. Videos are watched and transcribed on the Gemini provider; the OpenAI provider covers voice notes and images only.
 
+The bridge also works the other way: an assistant can **send** a preloaded image, video, voice note or document mid-conversation, picking the right one from the conversation itself. See [Sending media](#sending-media).
+
 ## Deploy your own in 3 steps
 
 You run your own copy. Nothing is shared or hosted centrally, and no one else can see your data.
@@ -228,6 +230,29 @@ npm run spike -- tool-listen
 ```
 
 Starts a debug server on `:4001` that logs all POST bodies. Point a test tool at `http://localhost:4001` to capture the real envelope. If `meta_data` keys differ from `contact_id`/`location_id`, update `readContext()` in `src/http/tool.ts`.
+
+## Sending media
+
+Assistable's own send path cannot carry attachments — `sendMessage` posts `{ type, contactId, message, html }` and ingestion empties `attachments` on AI-authored messages — so outbound media goes out as its own GHL message, using the same Private Integration Token the reader already uses.
+
+**Setup.** On the dashboard, add each asset with a name, a short description of what it is, and a URL. Host the file wherever it already lives; your CRM's media library is the usual place. Nothing is uploaded to or stored by the bridge — only the name, description, kind and URL.
+
+The description is what the assistant chooses by, so write it the way a customer would ask:
+
+| Name | What it is |
+|---|---|
+| `demo-video` | 60s walkthrough of how the product works |
+| `price-sheet` | current pricing and package comparison |
+
+**How the assistant uses it.** The `send_media` tool is created the first time you add an asset (never before — a send tool over an empty library just invites the model to promise media you cannot deliver). Its description carries the whole catalogue, because v3 tools take no parameter schema, so it is re-pushed automatically on every library edit.
+
+The assistant calls `send_media` with an asset name and an optional caption. The caption rides on the media message itself: our message reaches the contact *before* the assistant's own reply, so the caption is what introduces it, and the tool tells the model not to repeat that line.
+
+**Channel.** Resolved from the contact's most recent conversation — WhatsApp, SMS, Email, Instagram, Facebook or Live Chat — falling back to SMS. It is never hardcoded, because sending an SMS into a WhatsApp thread costs real money and usually fails.
+
+**Limits**, enforced by the bridge rather than the prompt: each asset at most once per contact, three media messages per contact per 24 hours, and a 60-second cooldown so one turn cannot fire several. Blocked attempts do not consume the budget, and each one returns text that steers the assistant ("you already sent that — refer back to it") instead of an error. Library capped at 20 assets.
+
+**Known limitation:** whether outbound attachments render on WhatsApp is unverified. A related GHL defect exists against their inbound-logging endpoint, closed without resolution. Prove one real WhatsApp send before relying on it. WhatsApp *templates* (Meta-approved, with the 24-hour window) are not supported — a different mechanism, not a file send.
 
 ## Kill Switches
 

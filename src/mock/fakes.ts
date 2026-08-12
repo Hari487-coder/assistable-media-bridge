@@ -53,6 +53,17 @@ export function createMockState() {
     mediaFetch: (async () => new Response(OGG)) as unknown as typeof fetch,
     // Public address: the mock exercises the happy path, not the SSRF backstop.
     mediaLookup: async () => [{ address: "93.184.216.34", family: 4 }],
+    /** Asset registration probes the URL with HEAD; MOCK_MODE has no network,
+     *  so answer from the extension and let the real classifier do the rest. */
+    assetFetch: (async (url: string) => {
+      const ext = String(url).split("?")[0].split(".").pop()?.toLowerCase() ?? "";
+      const type = ext === "mp4" ? "video/mp4"
+        : ext === "png" || ext === "jpg" ? `image/${ext === "jpg" ? "jpeg" : ext}`
+        : ext === "pdf" ? "application/pdf"
+        : ext === "ogg" || ext === "mp3" ? `audio/${ext === "mp3" ? "mpeg" : "ogg"}`
+        : "application/octet-stream";
+      return new Response(null, { status: 200, headers: { "content-type": type } });
+    }) as unknown as typeof fetch,
   };
 }
 export type MockState = ReturnType<typeof createMockState>;

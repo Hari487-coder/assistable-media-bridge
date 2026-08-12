@@ -38,6 +38,50 @@ describe("mock-mode e2e", () => {
     expect(tool.body.result).toContain("Voice note transcript");
   });
 
+  it("registers an asset and sends it, attachments and all, end to end", async () => {
+    const { app, wireDeps } = buildApp(loadConfig());
+    const setup = await request(app).post("/setup").type("form").send({
+      label: "MockSend", locationId: "mock-loc-2", assistantId: "mock-asst-1",
+      provider: "gemini", v3Key: "any", ghlPit: "any", aiKey: "any",
+    });
+    const token = /\/mcp\/([a-f0-9]{48})/.exec(setup.text)?.[1] as string;
+    expect(token).toBeTruthy();
+
+    // 1. The operator registers an asset in the portal.
+    const added = await request(app).post(`/dashboard/${token}/assets`).type("form").send({
+      name: "Demo Video", description: "60s walkthrough of the product",
+      url: "https://cdn.example.com/demo.mp4",
+    });
+    expect(added.status).toBe(302);
+
+    // 2. It shows up in the tool description the assistant reads.
+    // Assert on the description, not the name: the add form uses "demo-video"
+    // as its placeholder, so matching the name alone passes even on a failed add.
+    const page = await request(app).get(`/dashboard/${token}`);
+    expect(page.text).toContain("60s walkthrough of the product");
+
+    // 3. The assistant calls send_media, and the media actually reaches GHL
+    //    with the attachment URL on the conversation's own channel.
+    const sendRes = await request(app).post(`/send/${token}`).send({
+      args: { asset: "demo-video", caption: "Here's a quick video 👇" },
+      meta_data: { contact_id: "mock-contact-1", location_id: "mock-loc-2" },
+    });
+    expect(sendRes.status).toBe(200);
+    expect(sendRes.body.result).toMatch(/sent/i);
+    expect(wireDeps.mockV3State.sentMessages).toEqual([{
+      contactId: "mock-contact-1", type: "WhatsApp", message: "Here's a quick video 👇",
+      attachments: ["https://cdn.example.com/demo.mp4"],
+    }]);
+
+    // 4. The same asset does not go out twice.
+    const again = await request(app).post(`/send/${token}`).send({
+      args: { asset: "demo-video" },
+      meta_data: { contact_id: "mock-contact-1", location_id: "mock-loc-2" },
+    });
+    expect(again.body.result).toMatch(/already sent/i);
+    expect(wireDeps.mockV3State.sentMessages).toHaveLength(1);
+  });
+
   it("buildApp constructs in non-mock mode and mounts routes without throwing", async () => {
     const cfg: AppConfig = {
       port: 0,

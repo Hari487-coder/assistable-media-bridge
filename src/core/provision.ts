@@ -323,10 +323,18 @@ export async function provisionTenant(deps: ProvisionDeps, input: TenantInput) {
   //    success.
   const { toolId, warnings } = await ensureTool(v3, deps.tenants, deps.publicBaseUrl, tenant);
 
+  // The send_media tool is deliberately NOT created here. It is created the
+  // first time the account registers an asset (see the portal's asset routes),
+  // because a send tool over an empty library is worse than no tool: the model
+  // sees a capability, calls it, and gets "nothing to send" — burning a turn
+  // and inviting it to promise media this account cannot deliver.
   return { tenant, toolId, warnings, reconnected };
 }
 
 export const PROMPT_SNIPPET =
   "If the contact sends, or refers to, a photo, image, screenshot, video, document, " +
   "or voice note, ALWAYS call the analyze_attachment tool first to read it, then " +
-  "respond based on its content. Never say you cannot open attachments.";
+  "respond based on its content. Never say you cannot open attachments. " +
+  "If one of your send_media assets would answer the contact better than text — for " +
+  "example a demo video when they ask how something works — send it with a short " +
+  "caption instead of describing it in words.";

@@ -576,7 +576,11 @@ export function createPortalRouter(ctx: PortalCtx): Router {
           </div>
         </form>
         <div class="section-title">Media the assistant can send</div>
-        ${assetError ? `<p class="warn">${esc(assetError)}</p>` : ""}
+        ${assetError ? `
+          <div class="callout warn">
+            <span class="mark">!</span>
+            <span>${esc(assetError)}</span>
+          </div>` : ""}
         ${assetList.length === 0
           ? `<p class="empty">No assets yet. Add one and the assistant can send it when the
               conversation calls for it.</p>`
@@ -686,10 +690,18 @@ export function createPortalRouter(ctx: PortalCtx): Router {
     try {
       const v3 = ctx.v3Factory(t.v3Key, t.subAccountId);
       const assistants = await v3.listAssistants();
+      // Both tools, not just the reader. A send tool attached only to the
+      // onboarding assistant is the exact failure assign-on-wake was built to
+      // fix: on a multi-assistant account the assistant actually handling the
+      // conversation has no tool to call, and nothing errors anywhere.
+      const toolIds = [toolId, ...(t.sendToolId ? [t.sendToolId] : [])];
       const results = await mapLimit(assistants, 4, async (a) => {
         try {
-          const r = await v3.assignTool(toolId, a.id);
-          return r.ok ? { id: a.id, ok: true } : { id: a.id, ok: false, error: r.error };
+          for (const id of toolIds) {
+            const r = await v3.assignTool(id, a.id);
+            if (!r.ok) return { id: a.id, ok: false, error: r.error };
+          }
+          return { id: a.id, ok: true };
         } catch (err) {
           return { id: a.id, ok: false, error: err instanceof Error ? err.message : "unknown" };
         }
