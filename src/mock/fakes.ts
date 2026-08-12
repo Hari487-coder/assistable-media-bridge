@@ -5,11 +5,15 @@ const OGG = new Uint8Array([...new TextEncoder().encode("OggS"), 0, 1, 2, 3]);
 export function createMockState() {
   let convUpdatedAt = "2026-07-23T10:00:00Z";
   const wokenConversations = new Set<string>();
+  /** Every outbound media send the mock accepted, so MOCK_MODE and the e2e can
+   *  assert what would actually have reached the contact. */
+  const sentMessages: Array<{ contactId: string; type: string; message?: string; attachments: string[] }> = [];
   const mediaMessages = [
     { id: "vmsg-1", content: null, ai: false, source: "USER", channel: "whatsapp", createdAt: "t1" },
   ];
   return {
     wokenConversations,
+    sentMessages,
     bumpConversation() { convUpdatedAt = "2026-07-23T11:00:00Z"; },
     v3Factory: () => ({
       validateKey: async () => ({ ok: true as const }),
@@ -35,6 +39,11 @@ export function createMockState() {
           attachments: ["https://storage.msgsndr.com/mock.ogg"],
           direction: "inbound", dateAdded: "t1" },
       ],
+      sendMessage: async (m: { contactId: string; type: string; message?: string; attachments: string[] }) => {
+        sentMessages.push(m);
+        return { ok: true as const, id: `mock-msg-${sentMessages.length}` };
+      },
+      latestConversationChannel: async () => "WhatsApp",
     }),
     providerFactory: () => ({
       describe: async (i: { kind: string }) =>
