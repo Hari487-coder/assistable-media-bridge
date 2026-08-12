@@ -1,7 +1,7 @@
 # Outbound Media Implementation Plan
 
 > **Execution:** Inline, single-threaded in this session (owner rule: no agent fan-outs).
-> Steps use checkbox (`- [ ]`) syntax for tracking.
+> Steps use checkbox (`- [x]`) syntax for tracking.
 
 **Goal:** Let an Assistable assistant send a preloaded image, video, voice note or document mid-conversation, chosen from its own asset library by conversation context.
 
@@ -39,10 +39,10 @@
 - `normalizeAssetName(raw): string` — lowercase slug
 - `validateAssetUrl(url, opts): Promise<{ ok: true; kind: AssetKind } | { ok: false; error: string }>`
 
-- [ ] Write failing tests: name slugging, uniqueness per tenant, 20-asset cap, kind from content-type, kind fallback from extension, private-address rejection, non-http scheme rejection, unreachable URL rejection.
-- [ ] Run tests, confirm they fail.
-- [ ] Implement schema, store, and validation.
-- [ ] Run tests, confirm they pass. Commit.
+- [x] Write failing tests: name slugging, uniqueness per tenant, 20-asset cap, kind from content-type, kind fallback from extension, private-address rejection, non-http scheme rejection, unreachable URL rejection.
+- [x] Run tests, confirm they fail.
+- [x] Implement schema, store, and validation.
+- [x] Run tests, confirm they pass. Commit.
 
 ---
 
@@ -56,10 +56,10 @@
 - `sendMessage({ contactId, type, message, attachments }): Promise<{ ok: true; id?: string } | { ok: false; error: string }>`
 - `latestConversationChannel(locationId, contactId): Promise<string>` — GHL type, `"SMS"` when undeterminable
 
-- [ ] Write failing tests: POST body carries `type`/`contactId`/`message`/`attachments`; non-2xx surfaces status; channel resolved from most recent conversation; unknown/missing channel defaults to SMS; WhatsApp/IG/FB/Email map through.
-- [ ] Run tests, confirm they fail.
-- [ ] Implement both methods on the existing client factory.
-- [ ] Run tests, confirm they pass. Commit.
+- [x] Write failing tests: POST body carries `type`/`contactId`/`message`/`attachments`; non-2xx surfaces status; channel resolved from most recent conversation; unknown/missing channel defaults to SMS; WhatsApp/IG/FB/Email map through.
+- [x] Run tests, confirm they fail.
+- [x] Implement both methods on the existing client factory.
+- [x] Run tests, confirm they pass. Commit.
 
 ---
 
@@ -73,10 +73,10 @@
 - `sendAssetForContact(deps, tenant, { contactId, asset, caption }): Promise<{ text: string }>`
 - `describeAssetsForPrompt(assets): string` — the asset list block embedded in the tool description
 
-- [ ] Write failing tests: happy path calls GHL with resolved channel and caption; unknown asset returns valid names; same asset twice blocked; 4th send in 24h blocked; cooldown blocks a second send inside 60s; blocked attempt does not consume budget; GHL failure returns steering text and records an error event; empty library returns a clear note.
-- [ ] Run tests, confirm they fail.
-- [ ] Implement resolution, guardrails, send, event recording, steering strings.
-- [ ] Run tests, confirm they pass. Commit.
+- [x] Write failing tests: happy path calls GHL with resolved channel and caption; unknown asset returns valid names; same asset twice blocked; 4th send in 24h blocked; cooldown blocks a second send inside 60s; blocked attempt does not consume budget; GHL failure returns steering text and records an error event; empty library returns a clear note.
+- [x] Run tests, confirm they fail.
+- [x] Implement resolution, guardrails, send, event recording, steering strings.
+- [x] Run tests, confirm they pass. Commit.
 
 ---
 
@@ -94,10 +94,10 @@
 - `ensureSendTool(v3, tenant, toolUrl, assets)`
 - `updateTool(toolId, patch: { url?: string; description?: string })`
 
-- [ ] Write failing tests: envelope with `asset` + `caption` reaches the core and returns `{result}`; missing contact returns a steering string not a 500; unknown token 404s; description lists asset names and descriptions; description re-pushed on library change.
-- [ ] Run tests, confirm they fail.
-- [ ] Implement endpoint, provisioning, and v3 patch generalization.
-- [ ] Run tests, confirm they pass. Commit.
+- [x] Write failing tests: envelope with `asset` + `caption` reaches the core and returns `{result}`; missing contact returns a steering string not a 500; unknown token 404s; description lists asset names and descriptions; description re-pushed on library change.
+- [x] Run tests, confirm they fail.
+- [x] Implement endpoint, provisioning, and v3 patch generalization.
+- [x] Run tests, confirm they pass. Commit.
 
 ---
 
@@ -107,10 +107,10 @@
 - Modify: `src/http/portal.ts`
 - Test: `test/portal-assets.test.ts`
 
-- [ ] Write failing tests: add asset via form; validation error rendered inline; remove asset; cap enforced with a clear message; list renders kind badge; tool description re-pushed after mutation.
-- [ ] Run tests, confirm they fail.
-- [ ] Implement the Assets section following existing portal markup and styling.
-- [ ] Run tests, confirm they pass. Commit.
+- [x] Write failing tests: add asset via form; validation error rendered inline; remove asset; cap enforced with a clear message; list renders kind badge; tool description re-pushed after mutation.
+- [x] Run tests, confirm they fail.
+- [x] Implement the Assets section following existing portal markup and styling.
+- [x] Run tests, confirm they pass. Commit.
 
 ---
 
@@ -120,10 +120,10 @@
 - Modify: `src/mock/fakes.ts`, `README.md`
 - Test: `test/e2e-mock.test.ts`
 
-- [ ] Extend mock state with a fake GHL send capturing the attachments array.
-- [ ] Add an e2e mock assertion: register asset → tool call → GHL send carries the URL.
-- [ ] Update README with the send half and the prompt snippet.
-- [ ] Run `npx tsc --noEmit` and the full suite; both clean. Commit.
+- [x] Extend mock state with a fake GHL send capturing the attachments array.
+- [x] Add an e2e mock assertion: register asset → tool call → GHL send carries the URL.
+- [x] Update README with the send half and the prompt snippet.
+- [x] Run `npx tsc --noEmit` and the full suite; both clean. Commit.
 
 ---
 
