@@ -53,7 +53,7 @@ export function buildApp(config: AppConfig) {
     tenants, events, providerFactory: providerFor, mediaFetch, mediaLookup,
   }));
   app.use(createPortalRouter({
-    tenants, events, publicBaseUrl: config.publicBaseUrl,
+    tenants, events, assets, publicBaseUrl: config.publicBaseUrl,
     v3Factory: (key, subAccountId) => v3For(key, subAccountId),
     ghlFactory: (pit) =>
       (mock ? mock.ghlFactory() : createGhlClient({ baseUrl: config.ghlBaseUrl, pit })),

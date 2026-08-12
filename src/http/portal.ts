@@ -1,11 +1,20 @@
 import { Router } from "express";
 import { parseBatchRows, provisionBatch, redactPits } from "../core/batch";
 import { mapLimit } from "../core/concurrency";
-import { PROMPT_SNIPPET, type ProvisionDeps, ensureTool, provisionTenant } from "../core/provision";
+import { normalizeAssetName, validateAssetUrl } from "../core/asset-url";
+import { PROMPT_SNIPPET, type ProvisionDeps, ensureSendTool, ensureTool, provisionTenant } from "../core/provision";
+import type { LookupFn } from "../media/download";
+import { MAX_ASSETS, type AssetStore } from "../store/assets";
 import type { EventStore } from "../store/events";
 import { MAX_ANALYSIS_INSTRUCTION } from "../store/tenants";
 
-export interface PortalCtx extends ProvisionDeps { events: EventStore }
+export interface PortalCtx extends ProvisionDeps {
+  events: EventStore;
+  assets: AssetStore;
+  /** Injected by tests so asset validation never performs real DNS or HTTP. */
+  assetLookup?: LookupFn;
+  assetFetch?: typeof fetch;
+}
 
 // ---- shared shell -----------------------------------------------------
 // Signature element: the "wire trace" — a thin dotted connector rendered
@@ -516,6 +525,11 @@ export function createPortalRouter(ctx: PortalCtx): Router {
       return;
     }
     const events = ctx.events.latest(t.id, 20);
+    const assetList = ctx.assets.list(t.id);
+    // Surfaced via a query param so a failed add can redirect back to the
+    // dashboard and still explain itself, rather than stranding the operator
+    // on a bare error page with their form contents gone.
+    const assetError = typeof req.query.assetError === "string" ? req.query.assetError : "";
     const rows = events.map((e) => `
       <tr>
         <td>${esc(new Date(e.at).toISOString())}</td>
@@ -559,6 +573,40 @@ export function createPortalRouter(ctx: PortalCtx): Router {
           </div>
           <div class="btn-row">
             <button class="btn btn-ghost">Save guidance</button>
+          </div>
+        </form>
+        <div class="section-title">Media the assistant can send</div>
+        ${assetError ? `<p class="warn">${esc(assetError)}</p>` : ""}
+        ${assetList.length === 0
+          ? `<p class="empty">No assets yet. Add one and the assistant can send it when the
+              conversation calls for it.</p>`
+          : `<table>
+              <tr><th>Name</th><th>Type</th><th>What it is</th><th></th></tr>
+              ${assetList.map((a) => `
+                <tr>
+                  <td><code>${esc(a.name)}</code></td>
+                  <td>${esc(a.kind)}</td>
+                  <td>${esc(a.description)}</td>
+                  <td>
+                    <form method="post" action="/dashboard/${t.token}/assets/remove">
+                      <input type="hidden" name="name" value="${esc(a.name)}">
+                      <button class="btn btn-ghost">Remove</button>
+                    </form>
+                  </td>
+                </tr>`).join("")}
+            </table>`}
+        <form method="post" action="/dashboard/${t.token}/assets">
+          <label>Name<input name="name" placeholder="demo-video" required></label>
+          <label>What it is<input name="description"
+            placeholder="60s walkthrough of how the product works" required></label>
+          <label>URL<input name="url" placeholder="https://..." required></label>
+          <div class="hint">
+            <span>Host the file wherever it already lives — your CRM's media library is the usual
+              place — and paste the link. The assistant picks by <em>what it is</em>, so describe it
+              the way a customer would ask for it. Limit ${MAX_ASSETS} assets.</span>
+          </div>
+          <div class="btn-row">
+            <button class="btn btn-ghost">Add asset</button>
           </div>
         </form>
         <div class="section-title">Recent activity</div>
@@ -673,6 +721,72 @@ export function createPortalRouter(ctx: PortalCtx): Router {
       clean ? `analysis guidance set (${Math.min(clean.length, MAX_ANALYSIS_INSTRUCTION)} chars)` : "analysis guidance cleared"
     );
     res.redirect(`/dashboard/${t.token}`);
+  });
+
+  /**
+   * Push the current library into the send tool's description.
+   *
+   * Called after every mutation because the description is the ONLY place the
+   * model learns which assets exist — v3 tools carry no parameter schema. A
+   * failure here is surfaced but never blocks the edit: the asset is already
+   * saved, and a stale description is recoverable on the next edit.
+   */
+  const refreshSendTool = async (token: string): Promise<string> => {
+    const t = ctx.tenants.getByToken(token);
+    if (!t) return "";
+    try {
+      const { warnings } = await ensureSendTool(
+        ctx.v3Factory(t.v3Key, t.subAccountId) as never,
+        ctx.tenants, ctx.publicBaseUrl, t, ctx.assets.list(t.id)
+      );
+      return warnings[0] ?? "";
+    } catch (err) {
+      return `the asset was saved, but the assistant's tool could not be updated (${err instanceof Error ? err.message : "unknown"}) — edit any asset to retry`;
+    }
+  };
+
+  router.post("/dashboard/:token/assets", async (req, res) => {
+    const t = ctx.tenants.getByToken(req.params.token);
+    if (!t) { res.status(404).end(); return; }
+    const body = req.body as { name?: string; description?: string; url?: string };
+    const back = (error: string) =>
+      res.redirect(`/dashboard/${t.token}?assetError=${encodeURIComponent(error)}`);
+
+    const name = normalizeAssetName(body.name ?? "");
+    const description = (body.description ?? "").trim().slice(0, 200);
+    const url = (body.url ?? "").trim();
+    if (!name) return back("give the asset a name using letters or numbers");
+    if (!description) return back("describe what the asset is — the assistant picks by that description");
+
+    const check = await validateAssetUrl(url, {
+      ...(ctx.assetFetch ? { fetchImpl: ctx.assetFetch } : {}),
+      ...(ctx.assetLookup ? { lookupImpl: ctx.assetLookup } : {}),
+    });
+    if (!check.ok) return back(check.error);
+
+    try {
+      ctx.assets.add(t.id, { name, description, kind: check.kind, url });
+    } catch (err) {
+      return back(err instanceof Error ? err.message : "the asset could not be saved");
+    }
+    ctx.events.record(t.id, "config", `asset added: ${name} (${check.kind})`);
+    const warning = await refreshSendTool(t.token);
+    return warning
+      ? res.redirect(`/dashboard/${t.token}?assetError=${encodeURIComponent(warning)}`)
+      : res.redirect(`/dashboard/${t.token}`);
+  });
+
+  router.post("/dashboard/:token/assets/remove", async (req, res) => {
+    const t = ctx.tenants.getByToken(req.params.token);
+    if (!t) { res.status(404).end(); return; }
+    const name = normalizeAssetName((req.body as { name?: string }).name ?? "");
+    if (ctx.assets.remove(t.id, name)) {
+      ctx.events.record(t.id, "config", `asset removed: ${name}`);
+    }
+    const warning = await refreshSendTool(t.token);
+    return warning
+      ? res.redirect(`/dashboard/${t.token}?assetError=${encodeURIComponent(warning)}`)
+      : res.redirect(`/dashboard/${t.token}`);
   });
 
   router.post("/dashboard/:token/toggle", (req, res) => {

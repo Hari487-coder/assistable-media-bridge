@@ -2,6 +2,7 @@ import express from "express";
 import request from "supertest";
 import { describe, expect, it } from "vitest";
 import { openDb } from "../src/db";
+import { createAssetStore } from "../src/store/assets";
 import { createEventStore } from "../src/store/events";
 import { createTenantStore } from "../src/store/tenants";
 import { createPortalRouter } from "../src/http/portal";
@@ -18,7 +19,7 @@ function makeApp(opts: {
   const app = express();
   app.use(express.urlencoded({ extended: false }));
   app.use(createPortalRouter({
-    tenants, events, publicBaseUrl: "https://media.example.com",
+    tenants, events, assets: createAssetStore(db), publicBaseUrl: "https://media.example.com",
     v3Factory: () => ({
       validateKey: async () => ({ ok: true }),
       listAssistants: async () => {

@@ -79,6 +79,16 @@ export async function validateAssetUrl(
     return { ok: false, error: "the URL must start with http:// or https://" };
   }
 
+  // An IP literal must never be handed to the resolver: there is nothing to
+  // resolve, and trusting a lookup to echo it back is how http://169.254.169.254
+  // slips through. Classify it directly.
+  const literal = parseIpLiteral(parsed.hostname);
+  if (literal) {
+    return isPrivateAddress(literal.address, literal.family)
+      ? { ok: false, error: `${parsed.hostname} is a private address` }
+      : await probe(url, opts);
+  }
+
   const lookup = opts.lookupImpl ?? defaultLookup;
   let addresses: Array<{ address: string; family: number }>;
   try {
@@ -90,6 +100,21 @@ export async function validateAssetUrl(
     return { ok: false, error: `${parsed.hostname} resolves to a private address` };
   }
 
+  return await probe(url, opts);
+}
+
+/** Parse a bare IPv4/IPv6 host. Returns null for real hostnames. */
+function parseIpLiteral(host: string): { address: string; family: number } | null {
+  const bare = host.startsWith("[") && host.endsWith("]") ? host.slice(1, -1) : host;
+  if (/^\d{1,3}(\.\d{1,3}){3}$/.test(bare)) return { address: bare, family: 4 };
+  if (bare.includes(":")) return { address: bare, family: 6 };
+  return null;
+}
+
+async function probe(
+  url: string,
+  opts: { fetchImpl?: typeof fetch; lookupImpl?: LookupFn }
+): Promise<AssetUrlCheck> {
   const f = opts.fetchImpl ?? fetch;
   let res: Response;
   try {
@@ -100,7 +125,6 @@ export async function validateAssetUrl(
   if (!res.ok) {
     return { ok: false, error: `the URL could not be reached (HTTP ${res.status})` };
   }
-
   const kind = kindFromContentType(res.headers.get("content-type")) ?? kindFromExtension(url);
   if (!kind) {
     return {
