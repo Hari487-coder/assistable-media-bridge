@@ -33,6 +33,38 @@ export function createGhlClient(opts: GhlClientOptions) {
     return { ok: res.ok, status: res.status, json: json as Record<string, unknown> | null };
   };
 
+  const post = async (path: string, body: unknown) => {
+    let res: Response;
+    try {
+      res = await f(`${opts.baseUrl}${path}`, {
+        method: "POST",
+        signal: AbortSignal.timeout(opts.timeoutMs ?? DEFAULT_TIMEOUT_MS),
+        headers: {
+          Authorization: `Bearer ${opts.pit}`,
+          Version: "2021-07-28",
+          Accept: "application/json",
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify(body),
+      });
+    } catch (err) {
+      const timedOut = err instanceof Error && (err.name === "TimeoutError" || err.name === "AbortError");
+      throw new Error(timedOut ? `timed out after ${opts.timeoutMs ?? DEFAULT_TIMEOUT_MS}ms` : "network error");
+    }
+    let json: unknown = null;
+    try { json = await res.json(); } catch { /* tolerate empty */ }
+    return { ok: res.ok, status: res.status, json: json as Record<string, unknown> | null };
+  };
+
+  // GHL reports a conversation's channel as TYPE_<CHANNEL>; the send endpoint
+  // wants the short form. Anything not in this map (TYPE_CALL, the TYPE_ACTIVITY_*
+  // system rows) is not a channel we can send media on, so it falls through to SMS.
+  const CHANNEL_BY_GHL_TYPE: Record<string, string> = {
+    TYPE_SMS: "SMS", TYPE_EMAIL: "Email", TYPE_WHATSAPP: "WhatsApp",
+    TYPE_INSTAGRAM: "IG", TYPE_FACEBOOK: "FB", TYPE_LIVE_CHAT: "Live_Chat",
+    TYPE_CUSTOM: "Custom",
+  };
+
   const asAttachments = (a: unknown): string[] =>
     Array.isArray(a) ? a.filter((u): u is string => typeof u === "string" && u.length > 0) : [];
 
@@ -81,6 +113,52 @@ export function createGhlClient(opts: GhlClientOptions) {
       return [...merged.values()]
         .sort((a, b) => (a.dateAdded < b.dateAdded ? 1 : -1))
         .slice(0, q.limit ?? 3);
+    },
+    /**
+     * Send a message with attachments on the contact's behalf.
+     *
+     * This is the whole reason the outbound half exists: Assistable's own send
+     * path posts { type, contactId, message, html } with no attachments field,
+     * so media can only leave through a separate call like this one. Never
+     * throws — a failed send must come back as text the assistant can act on,
+     * not an exception that kills the tool call.
+     */
+    async sendMessage(m: {
+      contactId: string; type: string; message?: string; attachments: string[];
+    }): Promise<{ ok: true; id?: string } | { ok: false; error: string }> {
+      const body: Record<string, unknown> = {
+        type: m.type, contactId: m.contactId, attachments: m.attachments,
+      };
+      if (m.message) body.message = m.message;
+      try {
+        const r = await post("/conversations/messages", body);
+        if (!r.ok) {
+          const detail = typeof r.json?.message === "string" ? `: ${r.json.message.slice(0, 200)}` : "";
+          return { ok: false, error: `ghl send ${r.status}${detail}` };
+        }
+        const id = r.json?.messageId ?? r.json?.id;
+        return { ok: true, ...(typeof id === "string" ? { id } : {}) };
+      } catch (err) {
+        return { ok: false, error: err instanceof Error ? err.message : "send failed" };
+      }
+    },
+    /** Which channel this contact is actually talking on. Defaults to SMS on
+     *  any doubt: a wrong-but-plausible channel is worse than the fallback,
+     *  and every account has SMS. */
+    async latestConversationChannel(locationId: string, contactId: string): Promise<string> {
+      try {
+        const r = await get(
+          `/conversations/search?locationId=${encodeURIComponent(locationId)}&contactId=${encodeURIComponent(contactId)}&sortBy=last_message_date&sort=desc&limit=1`
+        );
+        if (!r.ok) return "SMS";
+        const convs = r.json?.conversations;
+        const first = (Array.isArray(convs) ? convs : [])[0] as
+          { lastMessageType?: string; type?: string } | undefined;
+        const raw = first?.lastMessageType ?? first?.type ?? "";
+        return CHANNEL_BY_GHL_TYPE[raw.toUpperCase()] ?? "SMS";
+      } catch {
+        return "SMS";
+      }
     },
     // A bare pass/fail here forced every failure — bad token, wrong-subaccount
     // token, bogus location id, GHL outage — into one identical error, which

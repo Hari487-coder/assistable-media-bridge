@@ -32,6 +32,24 @@ export function openDb(path: string): Db {
       kind TEXT NOT NULL, detail TEXT NOT NULL, at INTEGER NOT NULL
     );
     CREATE INDEX IF NOT EXISTS idx_events_tenant ON events(tenant_id, id DESC);
+    CREATE TABLE IF NOT EXISTS assets (
+      id TEXT PRIMARY KEY, tenant_id TEXT NOT NULL, name TEXT NOT NULL,
+      description TEXT NOT NULL, kind TEXT NOT NULL, url TEXT NOT NULL,
+      created_at INTEGER NOT NULL,
+      UNIQUE (tenant_id, name)
+    );
+    -- Keyed on CONTACT, not conversation: a contact owns several threads and
+    -- which one search ranks first flips between calls, so a conversation key
+    -- would let the same asset go out twice to one person. asset_name rather
+    -- than an id so deleting and re-adding an asset does not reset its
+    -- already-sent history and re-spam the contact.
+    CREATE TABLE IF NOT EXISTS media_sends (
+      id INTEGER PRIMARY KEY AUTOINCREMENT, tenant_id TEXT NOT NULL,
+      contact_id TEXT NOT NULL, asset_name TEXT NOT NULL, channel TEXT NOT NULL,
+      at INTEGER NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_media_sends
+      ON media_sends(tenant_id, contact_id, at DESC);
   `);
   // Idempotent migrations for instances created before a column existed.
   // node:sqlite has no "ADD COLUMN IF NOT EXISTS", so we probe and ignore the

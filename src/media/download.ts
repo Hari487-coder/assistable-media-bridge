@@ -101,7 +101,7 @@ export function isPrivateAddress(ip: string, family: number): boolean {
   return false;
 }
 
-const defaultLookup: LookupFn = (host) => dnsLookup(host, { all: true });
+export const defaultLookup: LookupFn = (host) => dnsLookup(host, { all: true });
 
 export async function downloadMedia(
   url: string,
