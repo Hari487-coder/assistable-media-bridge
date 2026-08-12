@@ -1,16 +1,21 @@
 import { Router } from "express";
 import type { GhlClient } from "../clients/ghl";
 import { analyzeForContact } from "../core/analyze";
+import { sendAssetForContact } from "../core/send";
 import type { LookupFn } from "../media/download";
 import type { MediaProvider } from "../providers";
 import type { EventStore } from "../store/events";
+import type { AssetStore } from "../store/assets";
 import type { ProcessedStore } from "../store/processed";
+import type { SendLog } from "../store/send-log";
 import type { Tenant, TenantStore } from "../store/tenants";
 
 export interface ToolRouterCtx {
   tenants: TenantStore; processed: ProcessedStore; events: EventStore;
   ghlFactory: (tenant: Tenant) => GhlClient;
   providerFactory: (tenant: Tenant) => MediaProvider;
+  assets: AssetStore;
+  sendLog: SendLog;
   mediaFetch?: typeof fetch;
   /** Injected only by tests, so unit runs never perform real DNS. */
   mediaLookup?: LookupFn;
@@ -35,6 +40,30 @@ function readContext(body: Record<string, unknown>): { contactId?: string; locat
   return {
     contactId: pick("contact_id", "contactId"),
     locationId: pick("location_id", "locationId"),
+  };
+}
+
+/** The model's own arguments live under `args`, but the proxy has been seen to
+ *  flatten them onto the body, and models vary between `asset` and
+ *  `asset_name`. Accept every shape rather than failing a real send over a key
+ *  name the assistant had no way to know. */
+function readSendArgs(body: Record<string, unknown>): { asset: string; caption?: string } {
+  const args = (body.args && typeof body.args === "object" && !Array.isArray(body.args)
+    ? body.args
+    : {}) as Record<string, unknown>;
+  const pick = (...keys: string[]) => {
+    for (const src of [args, body]) {
+      for (const k of keys) {
+        const v = src[k];
+        if (typeof v === "string" && v.trim()) return v.trim();
+      }
+    }
+    return undefined;
+  };
+  const caption = pick("caption", "message", "text");
+  return {
+    asset: pick("asset", "asset_name", "assetName", "name") ?? "",
+    ...(caption ? { caption } : {}),
   };
 }
 
@@ -99,6 +128,61 @@ export function createToolRouter(ctx: ToolRouterCtx): Router {
       // Absolute last resort — the assistant must never see a 500.
       if (!res.headersSent) {
         res.status(200).json({ result: "[the attachment could not be read right now]" });
+      }
+    }
+  });
+
+  // Outbound half. Serialized on the same key as the read tool: a run that
+  // both reads an attachment and sends one must not interleave, or two sends
+  // can pass the cooldown check before either records.
+  router.post("/send/:token", async (req, res) => {
+    try {
+      const tenant = ctx.tenants.getByToken(req.params.token);
+      if (!tenant) {
+        res.status(404).json({ result: "[media sending is not configured for this account]" });
+        return;
+      }
+      if (!tenant.enabled) {
+        ctx.events.record(tenant.id, "media_skip", "send called while bridge disabled");
+        res.json({ result: "[media sending is disabled for this account]" });
+        return;
+      }
+      const body = (req.body ?? {}) as Record<string, unknown>;
+      const { contactId } = readContext(body);
+      if (!contactId) {
+        ctx.events.record(tenant.id, "media_skip", "no contact context in send envelope");
+        res.json({ result: "[no contact context supplied, so nothing was sent]" });
+        return;
+      }
+      const args = readSendArgs(body);
+      try {
+        const out = await serialized(`${tenant.id}:${contactId}`, () =>
+          sendAssetForContact(
+            {
+              ghl: ctx.ghlFactory(tenant),
+              assets: ctx.assets,
+              events: ctx.events,
+              sendLog: ctx.sendLog,
+            },
+            tenant, { contactId, ...args }
+          )
+        );
+        res.json({ result: out.text });
+      } catch (err) {
+        try {
+          ctx.events.record(tenant.id, "error", `send: ${err instanceof Error ? err.message : "unknown"}`);
+        } catch { /* event store failure must not break the LLM-safe response */ }
+        res.json({
+          result: "[the media could not be sent right now. The contact did NOT receive it — " +
+            "never claim or imply that you sent it.]",
+        });
+      }
+    } catch {
+      if (!res.headersSent) {
+        res.status(200).json({
+          result: "[the media could not be sent right now. The contact did NOT receive it — " +
+            "never claim or imply that you sent it.]",
+        });
       }
     }
   });

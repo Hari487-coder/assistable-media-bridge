@@ -131,6 +131,12 @@ export function createV3Client(opts: V3ClientOptions) {
     },
     /** Repoint an existing tool's webhook URL (e.g. a tool created by an older
      *  bridge instance must be re-aimed at THIS instance before reuse). */
+    async updateTool(toolId: string, patch: { url?: string; description?: string }) {
+      const r = await call("PATCH", `v3/tools/${toolId}`, patch);
+      return r.ok
+        ? { ok: true as const }
+        : { ok: false as const, error: `v3 updateTool ${errDetail(r.status, r.json)}` };
+    },
     async updateToolUrl(toolId: string, url: string) {
       const r = await call("PATCH", `v3/tools/${toolId}`, { url });
       return r.ok

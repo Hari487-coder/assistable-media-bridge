@@ -20,7 +20,7 @@ export function openDb(path: string): Db {
       -- schema-identical — dropping a column on a live SQLite file is a worse
       -- trade than carrying an unread one. Nothing reads it.
       reactions_on INTEGER DEFAULT 1,
-      sub_account_id TEXT, analysis_instruction TEXT,
+      sub_account_id TEXT, analysis_instruction TEXT, send_tool_id TEXT,
       created_at INTEGER NOT NULL
     );
     CREATE TABLE IF NOT EXISTS processed (
@@ -60,6 +60,7 @@ export function openDb(path: string): Db {
     // Retired — see the note on the column above. Kept so an instance that
     // already took it and a fresh install stay schema-identical.
     "ALTER TABLE tenants ADD COLUMN reactions_on INTEGER",
+    "ALTER TABLE tenants ADD COLUMN send_tool_id TEXT",
   ]) {
     try { db.exec(stmt); } catch { /* column already present */ }
   }

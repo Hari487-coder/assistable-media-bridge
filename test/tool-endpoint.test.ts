@@ -3,7 +3,9 @@ import request from "supertest";
 import { describe, expect, it } from "vitest";
 import { openDb } from "../src/db";
 import { createEventStore } from "../src/store/events";
+import { createAssetStore } from "../src/store/assets";
 import { createProcessedStore } from "../src/store/processed";
+import { createSendLog } from "../src/store/send-log";
 import { createTenantStore } from "../src/store/tenants";
 import { createToolRouter, type ToolRouterCtx } from "../src/http/tool";
 
@@ -39,6 +41,8 @@ function makeApp(overrides?: Partial<ToolRouterCtx>) {
     }),
     mediaFetch: (async () => new Response(oggBytes)) as unknown as typeof fetch,
     mediaLookup: async () => [{ address: "93.184.216.34", family: 4 }],
+    assets: createAssetStore(db),
+    sendLog: createSendLog(db),
     ...overrides,
   }));
   return { app, token: t.token, tenants, events };

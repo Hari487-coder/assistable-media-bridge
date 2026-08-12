@@ -10,6 +10,8 @@ import { createEventStore } from "../store/events";
 import { createProcessedStore } from "../store/processed";
 import { createTenantStore, type Tenant } from "../store/tenants";
 import { createMcpRouter } from "./mcp";
+import { createAssetStore } from "../store/assets";
+import { createSendLog } from "../store/send-log";
 import { createPortalRouter } from "./portal";
 import { createToolRouter } from "./tool";
 
@@ -35,6 +37,9 @@ export function buildApp(config: AppConfig) {
   // one real DNS query left in the pipeline and fails wherever DNS is absent.
   const mediaLookup = mock ? mock.mediaLookup : undefined;
 
+  const assets = createAssetStore(db);
+  const sendLog = createSendLog(db);
+
   const app = express();
   app.use(express.json({ limit: "1mb" }));
   app.use(express.urlencoded({ extended: false }));
@@ -42,6 +47,7 @@ export function buildApp(config: AppConfig) {
   app.use(createToolRouter({
     tenants, processed, events,
     ghlFactory: ghlFor, providerFactory: providerFor, mediaFetch, mediaLookup,
+    assets, sendLog,
   }));
   app.use(createMcpRouter({
     tenants, events, providerFactory: providerFor, mediaFetch, mediaLookup,

@@ -1,7 +1,9 @@
 import type { GhlClient } from "../clients/ghl";
 import type { V3Client } from "../clients/v3";
 import type { MediaProvider } from "../providers";
+import type { Asset } from "../store/assets";
 import type { Tenant, TenantInput, TenantStore } from "../store/tenants";
+import { buildAssetCatalogue } from "./send";
 
 export const TOOL_DESCRIPTION =
   "Read the contact's most recent attachment (voice note, image, video, or document) " +
@@ -9,6 +11,30 @@ export const TOOL_DESCRIPTION =
   "an attachment, photo, video, voice note, or document.";
 
 const TOOL_NAME = "analyze_attachment";
+
+export const SEND_TOOL_NAME = "send_media";
+
+/**
+ * The send tool's description, rebuilt whenever the library changes.
+ *
+ * v3 tools carry no parameter schema (createTool sends name/description/url
+ * only), so this text is the ONLY place the model learns which assets exist.
+ * That makes it load-bearing rather than documentation: an out-of-date
+ * description is an assistant guessing at asset names.
+ */
+export function buildSendToolDescription(assets: Asset[]): string {
+  return [
+    "Send one of this account's preloaded media assets (image, video, voice note or document) " +
+    "to the contact in the current conversation. Call this when a specific asset would answer " +
+    "the contact better than text — for example a demo video when they ask how something works.",
+    "",
+    'Arguments: "asset" is the exact name from the list below. "caption" is optional text sent ' +
+    "with the media; the contact sees it on the media message itself, so do not repeat that line " +
+    "in your own reply.",
+    "",
+    buildAssetCatalogue(assets),
+  ].join("\n");
+}
 
 export interface ProvisionDeps {
   tenants: TenantStore;
@@ -88,6 +114,65 @@ export async function ensureTool(
   if (!assigned.ok) {
     warnings.push(
       `the ${TOOL_NAME} tool exists but could NOT be attached to your assistant (${assigned.error}). Attach it manually to assistant ${tenant.assistantId}, or the assistant will not be able to read attachments`
+    );
+  }
+  return { toolId, warnings };
+}
+
+/**
+ * Create-or-recover the send_media tool and keep its description current.
+ *
+ * Deliberately separate from ensureTool rather than folded into it: the two
+ * tools fail independently, and a send-tool problem must never stop an
+ * account from READING attachments, which is the feature people already
+ * depend on. Same recovery shape as ensureTool — a create failure falls back
+ * to lookup, because the v3 unique constraint covers soft-deleted rows and a
+ * previously-deleted tool makes create fail forever.
+ *
+ * Safe to call repeatedly: onboarding, "retry tool setup", and after every
+ * library edit, since the description is the only place the model learns
+ * which assets exist.
+ */
+export async function ensureSendTool(
+  v3: Pick<V3Client, "createTool" | "findToolByName" | "assignTool" | "updateTool">,
+  tenants: Pick<TenantStore, "setSendToolId">,
+  publicBaseUrl: string,
+  tenant: Pick<Tenant, "id" | "token" | "assistantId" | "sendToolId">,
+  assets: Asset[]
+): Promise<{ toolId: string | null; warnings: string[] }> {
+  const warnings: string[] = [];
+  const toolUrl = `${publicBaseUrl}/send/${tenant.token}`;
+  const description = buildSendToolDescription(assets);
+
+  let toolId = tenant.sendToolId;
+  if (!toolId) {
+    try {
+      const created = await v3.createTool({ name: SEND_TOOL_NAME, description, url: toolUrl });
+      toolId = created.id ?? (created.conflict ? await v3.findToolByName(SEND_TOOL_NAME) : null);
+    } catch {
+      try { toolId = await v3.findToolByName(SEND_TOOL_NAME); } catch { /* fall through */ }
+    }
+    if (!toolId) {
+      warnings.push(
+        `could not create the ${SEND_TOOL_NAME} tool — create it manually with URL ${toolUrl} and assign it to assistant ${tenant.assistantId}, or the assistant will not be able to send media`
+      );
+      return { toolId: null, warnings };
+    }
+    tenants.setSendToolId(tenant.id, toolId);
+  }
+
+  // Always repoint AND refresh: a tool recovered from an older instance has a
+  // stale URL, and any tool at all has a stale asset list after an edit.
+  const up = await v3.updateTool(toolId, { url: toolUrl, description });
+  if (!up.ok) {
+    warnings.push(
+      `the ${SEND_TOOL_NAME} tool could not be updated (${up.error}) — the assistant may be working from an out-of-date asset list`
+    );
+  }
+  const assigned = await v3.assignTool(toolId, tenant.assistantId);
+  if (!assigned.ok) {
+    warnings.push(
+      `the ${SEND_TOOL_NAME} tool exists but could NOT be attached to assistant ${tenant.assistantId} (${assigned.error}) — attach it manually or the assistant cannot send media`
     );
   }
   return { toolId, warnings };

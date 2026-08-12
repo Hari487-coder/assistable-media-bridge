@@ -10,6 +10,9 @@ export interface TenantInput {
 }
 export interface Tenant extends TenantInput {
   id: string; token: string; wakerEnabled: boolean; toolId: string | null;
+  /** The send_media tool. Separate from toolId: the two tools are provisioned
+   *  independently, so one can exist while the other failed to create. */
+  sendToolId: string | null;
   enabled: boolean;
   modalities: { audio: boolean; image: boolean };
   /** Extra guidance appended to the built-in extraction prompt. Set from the
@@ -28,6 +31,7 @@ type Row = {
   ghl_pit_enc: string; ai_key_enc: string; waker_enabled: number;
   tool_id: string | null; enabled: number; audio_on: number; image_on: number;
   sub_account_id: string | null; analysis_instruction: string | null;
+  send_tool_id: string | null;
 };
 
 export function createTenantStore(db: Db, key: Buffer) {
@@ -38,6 +42,7 @@ export function createTenantStore(db: Db, key: Buffer) {
     ghlPit: decryptSecret(r.ghl_pit_enc, key),
     aiKey: decryptSecret(r.ai_key_enc, key),
     wakerEnabled: r.waker_enabled === 1, toolId: r.tool_id,
+    sendToolId: r.send_tool_id ?? null,
     enabled: r.enabled === 1,
     modalities: { audio: r.audio_on === 1, image: r.image_on === 1 },
     analysisInstruction: r.analysis_instruction || null,
@@ -116,6 +121,9 @@ export function createTenantStore(db: Db, key: Buffer) {
     },
     setToolId(id: string, toolId: string) {
       db.prepare("UPDATE tenants SET tool_id = ? WHERE id = ?").run(toolId, id);
+    },
+    setSendToolId(id: string, toolId: string) {
+      db.prepare("UPDATE tenants SET send_tool_id = ? WHERE id = ?").run(toolId, id);
     },
     setWaker(id: string, on: boolean) {
       db.prepare("UPDATE tenants SET waker_enabled = ? WHERE id = ?").run(on ? 1 : 0, id);

@@ -8,7 +8,7 @@ import type { Tenant } from "../src/store/tenants";
 const tenant = {
   id: "t1", token: "tok", label: "T", locationId: "L", assistantId: "A",
   provider: "gemini", v3Key: "v", ghlPit: "p", aiKey: "k",
-  wakerEnabled: true, toolId: null, enabled: true,
+  wakerEnabled: true, toolId: null, sendToolId: null, enabled: true,
   modalities: { audio: true, image: true, reactions: true }, analysisInstruction: null,
 } as Tenant;
 
