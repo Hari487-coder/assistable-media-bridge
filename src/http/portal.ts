@@ -7,6 +7,7 @@ import type { LookupFn } from "../media/download";
 import { MAX_ASSETS, type AssetStore } from "../store/assets";
 import type { EventStore } from "../store/events";
 import { MAX_ANALYSIS_INSTRUCTION } from "../store/tenants";
+import { forgetTokens, rememberToken, rememberedTokens } from "./session";
 
 export interface PortalCtx extends ProvisionDeps {
   events: EventStore;
@@ -225,8 +226,33 @@ const esc = (s: string) =>
 export function createPortalRouter(ctx: PortalCtx): Router {
   const router = Router();
 
-  router.get("/", (_req, res) => {
-    res.send(shell("Media MCP — Connect", `
+  router.get("/", (req, res) => {
+    // Anything remembered but since deleted is dropped silently — a stale
+    // token is not an error worth showing anyone.
+    const mine = rememberedTokens(req)
+      .map((tok) => ctx.tenants.getByToken(tok))
+      .filter((t): t is NonNullable<typeof t> => t !== null);
+    const returning = mine.length === 0 ? "" : `
+      <div class="panel" style="margin-bottom:22px">
+        <div class="section-title" style="margin-top:0">Your connected subaccounts</div>
+        <table>
+          ${mine.map((t) => `
+            <tr>
+              <td><strong>${esc(t.label)}</strong><br>
+                <small class="copy">${esc(t.locationId)}</small></td>
+              <td>${t.enabled ? `<span class="pill on">enabled</span>` : `<span class="pill">disabled</span>`}</td>
+              <td><a class="btn btn-ghost" href="/dashboard/${t.token}">Open dashboard</a></td>
+            </tr>`).join("")}
+        </table>
+        <p class="lede" style="margin:14px 0 0;font-size:13px">Remembered on this browser only.
+          Your dashboard link is also the key to it, so bookmark it if you use more than one device.</p>
+        <form method="post" action="/forget">
+          <div class="btn-row">
+            <button class="btn btn-ghost">Forget this browser</button>
+          </div>
+        </form>
+      </div>`;
+    res.send(shell("Media MCP — Connect", returning + `
       <div class="journey" aria-label="Setup progress">
         <span class="s done"><span class="n">✓</span> <b>Deployed</b> · your instance</span>
         <span class="s now"><span class="n">2</span> <b>Connect</b> your account</span>
@@ -306,6 +332,7 @@ export function createPortalRouter(ctx: PortalCtx): Router {
       });
       const mcpUrl = `${ctx.publicBaseUrl}/mcp/${r.tenant.token}`;
       const title = r.reconnected ? "Reconnected" : "Connected";
+      rememberToken(req, res, r.tenant.token);
       res.send(shell(title, `
         <h1>${title}</h1>
         <p class="lede">${esc(r.tenant.label)} is wired up. Point the assistant at the tool below
@@ -526,6 +553,7 @@ export function createPortalRouter(ctx: PortalCtx): Router {
       `));
       return;
     }
+    rememberToken(req, res, t.token);
     const events = ctx.events.latest(t.id, 20);
     const assetList = ctx.assets.list(t.id);
     // Surfaced via a query param so a failed add can redirect back to the
@@ -834,6 +862,11 @@ export function createPortalRouter(ctx: PortalCtx): Router {
     return warning
       ? res.redirect(`/dashboard/${t.token}?assetError=${encodeURIComponent(warning)}`)
       : res.redirect(`/dashboard/${t.token}`);
+  });
+
+  router.post("/forget", (_req, res) => {
+    forgetTokens(res);
+    res.redirect("/");
   });
 
   router.post("/dashboard/:token/toggle", (req, res) => {
