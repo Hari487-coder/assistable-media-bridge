@@ -4,10 +4,10 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <meta name="color-scheme" content="light only">
-<title>Media MCP: your Assistable agents understand voice notes and photos</title>
-<meta name="description" content="When a customer sends a voice note, a photo, or a PDF, your Assistable voice and chat agents read it and reply. Free to run, self-hosted, on every channel.">
-<meta property="og:title" content="Media MCP: your Assistable agents understand voice notes and photos">
-<meta property="og:description" content="A customer sends a voice note on WhatsApp. Your agent hears it and answers, instead of going silent.">
+<title>Media MCP: your Assistable agents read and send voice notes, photos and video</title>
+<meta name="description" content="When a customer sends a voice note, a photo, or a PDF, your Assistable agents read it and reply — and send back the image, video, voice note or document that answers best. Free to run, self-hosted, on every channel.">
+<meta property="og:title" content="Media MCP: your Assistable agents read and send voice notes, photos and video">
+<meta property="og:description" content="A customer sends a voice note on WhatsApp. Your agent hears it, answers, and sends back the demo video that explains the rest.">
 <meta property="og:type" content="website">
 <link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600&family=Geist+Mono:wght@400;500&display=swap" rel="stylesheet">
@@ -158,12 +158,14 @@ section{padding:1.5rem 1.15rem}
 </header>
 
 <div class="hero">
-  <h1>Your AI agent, now understands voice notes.</h1>
-  <p class="lede">When a customer sends a voice note, a photo, or a document,
-  your Assistable agent reads it and replies. On WhatsApp, SMS, every channel.</p>
+  <h1>Your AI agent, now understands voice notes. And sends video back.</h1>
+  <p class="lede">When a customer sends a voice note, a photo, or a document, your Assistable
+  agent reads it and replies. When a demo video would answer better than another paragraph, it
+  sends the video. On WhatsApp, SMS, every channel.</p>
   <p style="margin:0 0 1.9rem"><a class="go" href="#start">Set it up in three steps</a></p>
   <ul class="facts">
     <li><b>Voice, images, PDFs</b> understood, not dropped</li>
+    <li><b>Sends media back</b> images, video, voice notes, documents</li>
     <li><b>Every channel</b> your CRM handles, one setup</li>
     <li><b>Your keys, your instance</b> nothing hosted by us</li>
   </ul>
@@ -185,6 +187,27 @@ section{padding:1.5rem 1.15rem}
 
   <div class="turn"><span class="who">Your agent, replying</span>
     <p>Of course. I've moved your appointment to Monday at 9am. Anything else I can help with?</p></div>
+</section>
+
+<section>
+  <h2>They ask how it works. Your agent sends the video.</h2>
+  <p class="say">You preload the assets once and describe each one in plain language. The agent
+    picks the right one from the conversation itself, and sends it on whatever channel the customer
+    is already using.</p>
+  <div class="turn"><span class="who">Customer, on WhatsApp</span>
+    <p>Ok but how does the setup actually work? Sounds complicated</p></div>
+<pre><span class="k">"tool"</span>: <span class="s">"send_media"</span>,
+<span class="k">"asset"</span>: <span class="s">"demo-video"</span>,
+<span class="k">"caption"</span>: <span class="s">"Easier to show you &mdash; here it is"</span>,
+<span class="k">"channel"</span>: <span class="s">"whatsapp"</span>,
+<span class="k">"sent"</span>: <span class="n">true</span></pre>
+  <div class="turn"><span class="who">Your agent, replying</span>
+    <p>Easier to show you &mdash; here it is &#128071;<br>
+      <span class="voicenote">&#127916; Product walkthrough &middot; 0:58</span></p>
+    <p>It is three steps and takes about ten minutes. Want me to book someone to walk you through it?</p></div>
+  <p class="say">It will not spam anyone: each asset goes out at most once per customer, three media
+    messages per customer per day, and the agent is told what it already sent, so it refers back
+    instead of resending.</p>
 </section>
 
 <section>
