@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { openDb } from "../src/db";
 import { MAX_ASSETS, createAssetStore } from "../src/store/assets";
-import { normalizeAssetName, validateAssetUrl } from "../src/core/asset-url";
+import { assetWarnings, normalizeAssetName, validateAssetUrl } from "../src/core/asset-url";
 
 const store = () => createAssetStore(openDb(":memory:"));
 const publicLookup = async () => [{ address: "93.184.216.34", family: 4 }];
@@ -34,7 +34,7 @@ describe("asset URL validation", () => {
     const r = await validateAssetUrl("https://cdn.example.com/a.mp4", {
       fetchImpl: head("video/mp4"), lookupImpl: publicLookup,
     });
-    expect(r).toEqual({ ok: true, kind: "video" });
+    expect(r).toMatchObject({ ok: true, kind: "video", contentType: "video/mp4" });
   });
   it("classifies each supported kind", async () => {
     const cases: Array<[string, string]> = [
@@ -45,14 +45,14 @@ describe("asset URL validation", () => {
       const r = await validateAssetUrl("https://cdn.example.com/a", {
         fetchImpl: head(ct), lookupImpl: publicLookup,
       });
-      expect(r, ct).toEqual({ ok: true, kind });
+      expect(r, ct).toMatchObject({ ok: true, kind });
     }
   });
   it("falls back to the file extension when the server sends no content type", async () => {
     const r = await validateAssetUrl("https://cdn.example.com/clip.mp4", {
       fetchImpl: head(null), lookupImpl: publicLookup,
     });
-    expect(r).toEqual({ ok: true, kind: "video" });
+    expect(r).toMatchObject({ ok: true, kind: "video" });
   });
   it("refuses a URL whose host resolves to a private address", async () => {
     // Otherwise a tenant could register an internal URL and have GHL fetch it.
@@ -122,5 +122,42 @@ describe("asset store", () => {
     expect(s.list("t1")).toHaveLength(0);
     expect(s.list("t2")).toHaveLength(1);
     expect(s.remove("t1", "demo-video")).toBe(false);
+  });
+});
+
+describe("compatibility warnings (never block a save)", () => {
+  const warn = (over: Partial<Parameters<typeof assetWarnings>[0]> = {}) =>
+    assetWarnings({ kind: "image", url: "https://cdn.example.com/a.jpg", contentType: "image/jpeg", bytes: 100_000, ...over });
+
+  it("says nothing about a clean, small JPEG", () => {
+    expect(warn()).toEqual([]);
+  });
+  it("flags .mov — the iPhone default that WhatsApp cannot play", () => {
+    const w = warn({ kind: "video", url: "https://cdn.example.com/clip.mov", contentType: "video/quicktime", bytes: 2_000_000 });
+    expect(w.join(" ")).toMatch(/\.mov/);
+    expect(w.join(" ")).toMatch(/MP4/);
+  });
+  it("flags HEIC — the other iPhone default", () => {
+    expect(warn({ url: "https://cdn.example.com/p.heic", contentType: "image/heic" }).join(" "))
+      .toMatch(/HEIC/);
+  });
+  it("flags formats WhatsApp will not render", () => {
+    for (const [ext, ct] of [["gif", "image/gif"], ["webp", "image/webp"], ["svg", "image/svg+xml"]]) {
+      expect(warn({ url: `https://cdn.example.com/a.${ext}`, contentType: ct }).join(" "), ext)
+        .toMatch(/WhatsApp does not render/);
+    }
+  });
+  it("flags an image too heavy for MMS, quoting the real size", () => {
+    const w = warn({ bytes: 1_133_646 }).join(" ");
+    expect(w).toMatch(/1\.1 MB/);
+    expect(w).toMatch(/MMS/);
+  });
+  it("flags per-channel hard ceilings", () => {
+    expect(warn({ bytes: 6_000_000 }).join(" ")).toMatch(/images over 5 MB/);
+    expect(warn({ kind: "video", url: "https://c.test/a.mp4", contentType: "video/mp4", bytes: 20_000_000 }).join(" "))
+      .toMatch(/video over 16 MB/);
+  });
+  it("stays quiet when the server declares no size", () => {
+    expect(warn({ bytes: null })).toEqual([]);
   });
 });

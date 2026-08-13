@@ -1,7 +1,7 @@
 import { Router } from "express";
 import { parseBatchRows, provisionBatch, redactPits } from "../core/batch";
 import { mapLimit } from "../core/concurrency";
-import { normalizeAssetName, validateAssetUrl } from "../core/asset-url";
+import { assetWarnings, normalizeAssetName, validateAssetUrl } from "../core/asset-url";
 import { PROMPT_SNIPPET, type ProvisionDeps, ensureSendTool, ensureTool, provisionTenant } from "../core/provision";
 import type { LookupFn } from "../media/download";
 import { MAX_ASSETS, type AssetStore } from "../store/assets";
@@ -184,6 +184,8 @@ const STYLE = `
   td.kind { color: var(--ink); font-family: var(--mono); font-size: 12.5px; }
   td.detail { font-family: var(--mono); font-size: 12px; color: var(--ink-faint); }
   .empty { color: var(--ink-faint); font-size: 13px; padding: 18px 0; }
+  .row-actions { display: flex; gap: 6px; align-items: center; }
+  .row-actions form { margin: 0; }
   a.link { color: var(--accent); }
   footer.copy {
     display: flex; align-items: center; justify-content: space-between;
@@ -530,6 +532,14 @@ export function createPortalRouter(ctx: PortalCtx): Router {
     // dashboard and still explain itself, rather than stranding the operator
     // on a bare error page with their form contents gone.
     const assetError = typeof req.query.assetError === "string" ? req.query.assetError : "";
+    // Non-blocking compatibility notes from the last add — the asset saved,
+    // but it may not render everywhere.
+    const assetNotice = typeof req.query.assetNotice === "string"
+      ? req.query.assetNotice.split("\n").filter(Boolean) : [];
+    // Edit prefills the same form: add-with-an-existing-name already updates in
+    // place, so editing needs no second route, just the values filled in.
+    const editing = typeof req.query.edit === "string"
+      ? assetList.find((a) => a.name === req.query.edit) ?? null : null;
     const rows = events.map((e) => `
       <tr>
         <td>${esc(new Date(e.at).toISOString())}</td>
@@ -581,6 +591,12 @@ export function createPortalRouter(ctx: PortalCtx): Router {
             <span class="mark">!</span>
             <span>${esc(assetError)}</span>
           </div>` : ""}
+        ${assetNotice.length ? `
+          <div class="callout warn">
+            <span class="mark">!</span>
+            <span><strong>Saved, but check this before it goes to a customer:</strong>
+              ${assetNotice.map((n) => `<br>&bull; ${esc(n)}`).join("")}</span>
+          </div>` : ""}
         ${assetList.length === 0
           ? `<p class="empty">No assets yet. Add one and the assistant can send it when the
               conversation calls for it.</p>`
@@ -591,7 +607,8 @@ export function createPortalRouter(ctx: PortalCtx): Router {
                   <td><code>${esc(a.name)}</code></td>
                   <td>${esc(a.kind)}</td>
                   <td>${esc(a.description)}</td>
-                  <td>
+                  <td class="row-actions">
+                    <a class="btn btn-ghost" href="/dashboard/${t.token}?edit=${encodeURIComponent(a.name)}#assets">Edit</a>
                     <form method="post" action="/dashboard/${t.token}/assets/remove">
                       <input type="hidden" name="name" value="${esc(a.name)}">
                       <button class="btn btn-ghost">Remove</button>
@@ -599,18 +616,28 @@ export function createPortalRouter(ctx: PortalCtx): Router {
                   </td>
                 </tr>`).join("")}
             </table>`}
-        <form method="post" action="/dashboard/${t.token}/assets">
-          <label>Name<input name="name" placeholder="demo-video" required></label>
+        <form method="post" action="/dashboard/${t.token}/assets" id="assets">
+          ${editing ? `
+          <div class="callout ok">
+            <span class="mark">&#9998;</span>
+            <span>Editing <code>${esc(editing.name)}</code>. The name stays the same so the
+              assistant keeps referring to the same asset — change the description or the URL.</span>
+          </div>
+          <input type="hidden" name="name" value="${esc(editing.name)}">`
+          : `<label>Name<input name="name" placeholder="demo-video" required></label>`}
           <label>What it is<input name="description"
-            placeholder="60s walkthrough of how the product works" required></label>
-          <label>URL<input name="url" placeholder="https://..." required></label>
+            placeholder="60s walkthrough of how the product works"
+            value="${editing ? esc(editing.description) : ""}" required></label>
+          <label>URL<input name="url" placeholder="https://..."
+            value="${editing ? esc(editing.url) : ""}" required></label>
           <div class="hint">
             <span>Host the file wherever it already lives — your CRM's media library is the usual
               place — and paste the link. The assistant picks by <em>what it is</em>, so describe it
               the way a customer would ask for it. Limit ${MAX_ASSETS} assets.</span>
           </div>
           <div class="btn-row">
-            <button class="btn btn-ghost">Add asset</button>
+            <button class="btn ${editing ? "btn-primary" : "btn-ghost"}">${editing ? "Save changes" : "Add asset"}</button>
+            ${editing ? `<a class="btn btn-ghost" href="/dashboard/${t.token}">Cancel</a>` : ""}
           </div>
         </form>
         <div class="section-title">Recent activity</div>
@@ -776,16 +803,24 @@ export function createPortalRouter(ctx: PortalCtx): Router {
     });
     if (!check.ok) return back(check.error);
 
+    const existed = ctx.assets.get(t.id, name) !== null;
     try {
       ctx.assets.add(t.id, { name, description, kind: check.kind, url });
     } catch (err) {
       return back(err instanceof Error ? err.message : "the asset could not be saved");
     }
-    ctx.events.record(t.id, "config", `asset added: ${name} (${check.kind})`);
+    ctx.events.record(
+      t.id, "config", `asset ${existed ? "updated" : "added"}: ${name} (${check.kind})`
+    );
     const warning = await refreshSendTool(t.token);
-    return warning
-      ? res.redirect(`/dashboard/${t.token}?assetError=${encodeURIComponent(warning)}`)
-      : res.redirect(`/dashboard/${t.token}`);
+    const notes = assetWarnings({
+      kind: check.kind, url, contentType: check.contentType, bytes: check.bytes,
+    });
+    const params = new URLSearchParams();
+    if (warning) params.set("assetError", warning);
+    if (notes.length) params.set("assetNotice", notes.join("\n"));
+    const qs = params.toString();
+    return res.redirect(`/dashboard/${t.token}${qs ? `?${qs}` : ""}`);
   });
 
   router.post("/dashboard/:token/assets/remove", async (req, res) => {

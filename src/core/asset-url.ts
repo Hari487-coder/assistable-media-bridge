@@ -54,8 +54,60 @@ export function normalizeAssetName(raw: string): string {
 }
 
 export type AssetUrlCheck =
-  | { ok: true; kind: AssetKind }
+  | { ok: true; kind: AssetKind; contentType: string | null; bytes: number | null }
   | { ok: false; error: string };
+
+/** Roughly where carriers start rejecting or badly recompressing an MMS. Not a
+ *  hard rule anywhere — carriers differ — so this drives a warning, never a
+ *  refusal. */
+const MMS_COMFORTABLE_BYTES = 500_000;
+const MB = 1_000_000;
+
+/**
+ * Non-blocking compatibility warnings shown at registration.
+ *
+ * Registration is the last moment anyone is paying attention. Everything here
+ * would otherwise surface as a lead receiving nothing, or a blurry image, with
+ * no error anywhere — WhatsApp silently ignores formats it cannot render and
+ * carriers silently recompress. These never block a save: a .mov is perfectly
+ * fine for an email-only audience, and only the operator knows their channels.
+ */
+export function assetWarnings(a: {
+  kind: AssetKind; url: string; contentType: string | null; bytes: number | null;
+}): string[] {
+  const out: string[] = [];
+  const ct = (a.contentType ?? "").split(";")[0].trim().toLowerCase();
+  const ext = (() => {
+    try { return new URL(a.url).pathname.split(".").pop()?.toLowerCase() ?? ""; }
+    catch { return ""; }
+  })();
+  const is = (...v: string[]) => v.includes(ext) || v.some((x) => ct.endsWith(`/${x}`));
+
+  if (ext === "mov" || ct === "video/quicktime") {
+    out.push("WhatsApp cannot play .mov files — export as MP4 (H.264) if this will go to WhatsApp contacts.");
+  }
+  if (is("heic", "heif")) {
+    out.push("WhatsApp and many phones cannot display HEIC — export as JPEG.");
+  }
+  if (is("gif", "webp", "svg", "svg+xml")) {
+    out.push(`WhatsApp does not render ${ext.toUpperCase() || "this format"} — use JPEG or PNG for WhatsApp contacts.`);
+  }
+
+  const bytes = a.bytes;
+  if (bytes !== null) {
+    const mb = (bytes / MB).toFixed(1);
+    if (a.kind === "image" && bytes > MMS_COMFORTABLE_BYTES) {
+      out.push(
+        `This image is ${mb} MB. Over roughly 0.5 MB, carriers often reject or heavily compress an MMS on SMS threads — shrink it if it is a QR code, logo or simple graphic.`
+      );
+    }
+    if (a.kind === "image" && bytes > 5 * MB) out.push(`WhatsApp rejects images over 5 MB; this is ${mb} MB.`);
+    if (a.kind === "video" && bytes > 16 * MB) out.push(`WhatsApp rejects video over 16 MB; this is ${mb} MB.`);
+    if (a.kind === "audio" && bytes > 16 * MB) out.push(`WhatsApp rejects audio over 16 MB; this is ${mb} MB.`);
+    if (a.kind === "document" && bytes > 100 * MB) out.push(`WhatsApp rejects documents over 100 MB; this is ${mb} MB.`);
+  }
+  return out;
+}
 
 /**
  * Validate an asset URL at registration time.
@@ -125,12 +177,17 @@ async function probe(
   if (!res.ok) {
     return { ok: false, error: `the URL could not be reached (HTTP ${res.status})` };
   }
-  const kind = kindFromContentType(res.headers.get("content-type")) ?? kindFromExtension(url);
+  const contentType = res.headers.get("content-type");
+  const kind = kindFromContentType(contentType) ?? kindFromExtension(url);
   if (!kind) {
     return {
       ok: false,
       error: "that file type cannot be sent as a message attachment — use an image, video, audio or document",
     };
   }
-  return { ok: true, kind };
+  const declared = Number(res.headers.get("content-length") ?? "");
+  return {
+    ok: true, kind, contentType,
+    bytes: Number.isFinite(declared) && declared > 0 ? declared : null,
+  };
 }

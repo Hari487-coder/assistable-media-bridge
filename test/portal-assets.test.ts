@@ -7,7 +7,7 @@ import { MAX_ASSETS, createAssetStore } from "../src/store/assets";
 import { createEventStore } from "../src/store/events";
 import { createTenantStore } from "../src/store/tenants";
 
-function makeApp(opts: { headContentType?: string; headOk?: boolean } = {}) {
+function makeApp(opts: { headContentType?: string; headOk?: boolean; headBytes?: number } = {}) {
   const db = openDb(":memory:");
   const tenants = createTenantStore(db, Buffer.alloc(32, 3));
   const events = createEventStore(db);
@@ -35,7 +35,10 @@ function makeApp(opts: { headContentType?: string; headOk?: boolean } = {}) {
     assetLookup: async () => [{ address: "93.184.216.34", family: 4 }],
     assetFetch: (async () => new Response(null, {
       status: opts.headOk === false ? 404 : 200,
-      headers: { "content-type": opts.headContentType ?? "video/mp4" },
+      headers: {
+        "content-type": opts.headContentType ?? "video/mp4",
+        ...(opts.headBytes ? { "content-length": String(opts.headBytes) } : {}),
+      },
     })) as unknown as typeof fetch,
   } as never));
   return { app, token: t.token, tenantId: t.id, assets, events, toolPatches };
@@ -126,6 +129,63 @@ describe("portal assets", () => {
       name: "demo-video", description: "60s walkthrough", url: "https://cdn.example.com/d.mp4",
     });
     expect(events.latest(tenantId, 10).some((e) => e.detail.includes("demo-video"))).toBe(true);
+  });
+  it("offers an Edit link per asset that prefills the form", async () => {
+    const { app, token, assets, tenantId } = makeApp();
+    assets.add(tenantId, {
+      name: "demo-video", description: "60s walkthrough", kind: "video",
+      url: "https://cdn.example.com/demo.mp4",
+    });
+    const list = await request(app).get(`/dashboard/${token}`);
+    expect(list.text).toContain(`?edit=demo-video`);
+
+    const form = await request(app).get(`/dashboard/${token}?edit=demo-video`);
+    expect(form.text).toContain('value="60s walkthrough"');
+    expect(form.text).toContain('value="https://cdn.example.com/demo.mp4"');
+    expect(form.text).toMatch(/Save changes/);
+    // The name is fixed while editing so the assistant keeps referring to the
+    // same asset; it rides along as a hidden field.
+    expect(form.text).toContain('<input type="hidden" name="name" value="demo-video">');
+  });
+  it("saving an edit updates in place rather than adding a second asset", async () => {
+    const { app, token, assets, tenantId } = makeApp();
+    assets.add(tenantId, {
+      name: "demo-video", description: "old copy", kind: "video",
+      url: "https://cdn.example.com/old.mp4",
+    });
+    await add(app, token, {
+      name: "demo-video", description: "new copy", url: "https://cdn.example.com/new.mp4",
+    });
+    expect(assets.list(tenantId)).toHaveLength(1);
+    expect(assets.get(tenantId, "demo-video")).toMatchObject({
+      description: "new copy", url: "https://cdn.example.com/new.mp4",
+    });
+  });
+  it("ignores an unknown edit target instead of erroring", async () => {
+    const { app, token } = makeApp();
+    const res = await request(app).get(`/dashboard/${token}?edit=does-not-exist`);
+    expect(res.status).toBe(200);
+    expect(res.text).toMatch(/Add asset/);
+  });
+  it("saves an oversized image but warns it may not survive MMS", async () => {
+    const { app, token, assets, tenantId } = makeApp({
+      headContentType: "image/png", headBytes: 1_133_646,
+    });
+    const res = await addFollow(app, token, {
+      name: "qr-code", description: "WhatsApp group QR", url: "https://cdn.example.com/qr.png",
+    });
+    // Saved — the warning must never block.
+    expect(assets.list(tenantId)).toHaveLength(1);
+    expect(res.text).toMatch(/MMS/);
+    expect(res.text).toMatch(/1\.1 MB/);
+  });
+  it("warns that a .mov will not play on WhatsApp", async () => {
+    const { app, token, assets, tenantId } = makeApp({ headContentType: "video/quicktime" });
+    const res = await addFollow(app, token, {
+      name: "clip", description: "iPhone clip", url: "https://cdn.example.com/clip.mov",
+    });
+    expect(assets.list(tenantId)).toHaveLength(1);
+    expect(res.text).toMatch(/MP4/);
   });
   it("404s an unknown token", async () => {
     const { app } = makeApp();

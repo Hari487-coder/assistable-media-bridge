@@ -53,6 +53,10 @@ describe("mock-mode e2e", () => {
       url: "https://cdn.example.com/demo.mp4",
     });
     expect(added.status).toBe(302);
+    // MOCK_MODE must rehearse the REAL path end to end. A v3 method missing
+    // from the mock surfaces here as a tool-update warning while every unit
+    // test still passes — which is exactly how `updateTool` slipped through.
+    expect(added.headers.location).not.toContain("assetError");
 
     // 2. It shows up in the tool description the assistant reads.
     // Assert on the description, not the name: the add form uses "demo-video"
