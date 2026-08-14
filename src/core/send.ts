@@ -98,6 +98,30 @@ export async function sendAssetForContact(
 
   const caption = (input.caption ?? "").trim().slice(0, MAX_CAPTION);
   const channel = await deps.ghl.latestConversationChannel(tenant.locationId, input.contactId);
+
+  // No messaging channel exists for this contact — every chat-widget visitor,
+  // since the widget keeps its conversation on Assistable's side and only
+  // creates a bare CRM contact. There is nothing to attach a file to, and the
+  // widget cannot render media from a custom tool (it renders cards only from
+  // its own built-in artifact search). So hand the model the link and let it
+  // share it in the reply, which the visitor can actually click. Still recorded
+  // against the guardrails: a link is a delivery, and the same asset must not
+  // be pasted at someone over and over.
+  if (channel === null) {
+    deps.sendLog.record(tenant.id, input.contactId, asset.name, "link");
+    deps.events.record(
+      tenant.id, "media_send", `${asset.name} (${asset.kind}) as a link → ${input.contactId}`
+    );
+    return {
+      text: note(
+        `this contact has no messaging channel to attach a file to (they are most likely in the ` +
+        `chat widget), so "${asset.name}" was NOT sent as an attachment. Include this link in your ` +
+        `reply instead so they can open it: ${asset.url}` +
+        (caption ? ` Introduce it with: "${caption}"` : "")
+      ),
+    };
+  }
+
   const result = await deps.ghl.sendMessage({
     contactId: input.contactId,
     type: channel,

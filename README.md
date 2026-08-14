@@ -252,6 +252,8 @@ The assistant calls `send_media` with an asset name and an optional caption. The
 
 **Limits**, enforced by the bridge rather than the prompt: each asset at most once per contact, three media messages per contact per 24 hours, and a 60-second cooldown so one turn cannot fire several. Blocked attempts do not consume the budget, and each one returns text that steers the assistant ("you already sent that — refer back to it") instead of an error. Library capped at 20 assets.
 
+**The chat widget.** `send_media` runs there too, but the widget renders rich content only from its own built-in artifact search, and a widget visitor has no messaging channel to attach a file to. So instead of guessing a channel and texting someone who is sitting on a web page, the assistant is handed the asset URL and shares it as a link in its reply. It still counts against the same limits, so nobody gets the same link twice. Making it render inline needs a platform change — see `docs/platform-asks/2026-08-13-widget-media-rendering.md`.
+
 **Known limitation:** whether outbound attachments render on WhatsApp is unverified. A related GHL defect exists against their inbound-logging endpoint, closed without resolution. Prove one real WhatsApp send before relying on it. WhatsApp *templates* (Meta-approved, with the 24-hour window) are not supported — a different mechanism, not a file send.
 
 ## Kill Switches

@@ -8,7 +8,7 @@ import type { Tenant } from "../src/store/tenants";
 
 const tenant = { id: "T1", locationId: "L1" } as Tenant;
 
-function harness(over: { send?: unknown; channel?: string } = {}) {
+function harness(over: { send?: unknown; channel?: string | null } = {}) {
   const db = openDb(":memory:");
   const assets = createAssetStore(db);
   const events = createEventStore(db);
@@ -24,7 +24,9 @@ function harness(over: { send?: unknown; channel?: string } = {}) {
   });
   const ghl = {
     sendMessage: over.send ?? (async (m: unknown) => { sent.push(m); return { ok: true as const, id: "m1" }; }),
-    latestConversationChannel: async () => over.channel ?? "WhatsApp",
+    // "channel" in over, not ?? — an explicit null means "no channel at all"
+    // (the widget case) and must not collapse into the default.
+    latestConversationChannel: async () => ("channel" in over ? over.channel : "WhatsApp"),
   };
   return {
     sent, events, assets, sendLog,
@@ -137,6 +139,41 @@ describe("guardrails", () => {
     const other = await sendAssetForContact(h.deps, tenant, { contactId: "C2", asset: "demo-video" });
     expect(h.sent).toHaveLength(2);
     expect(other.text).toMatch(/sent/i);
+  });
+});
+
+describe("no messaging channel (the chat widget)", () => {
+  // The widget loads custom tools and creates a bare CRM contact, so send_media
+  // fires there — but the widget keeps its conversation on Assistable's side
+  // and renders media only from its own built-in artifact search. Guessing SMS
+  // here texted a website visitor.
+  const widget = () => harness({ channel: null });
+
+  it("does not attach anything, and hands the model the link instead", async () => {
+    const h = widget();
+    const r = await call(h, "demo-video", "Here's the walkthrough");
+    expect(h.sent).toHaveLength(0);
+    expect(r.text).toContain("https://cdn.example.com/demo.mp4");
+    expect(r.text).toMatch(/include this link in your reply/i);
+    expect(r.text).toMatch(/NOT sent as an attachment/i);
+  });
+  it("passes the caption through so the model can introduce it", async () => {
+    const r = await call(widget(), "demo-video", "Here's the walkthrough");
+    expect(r.text).toContain("Here's the walkthrough");
+  });
+  it("counts as a delivery, so the same link is not pasted twice", async () => {
+    const h = widget();
+    await call(h, "demo-video");
+    const again = await call(h, "demo-video");
+    expect(again.text).toMatch(/already sent/i);
+    expect(h.sendLog.countSince("T1", "C1", 0)).toBe(1);
+  });
+  it("records it in the activity feed as a link", async () => {
+    const h = widget();
+    await call(h, "demo-video");
+    const feed = h.events.latest("T1", 10).map((e) => `${e.kind}:${e.detail}`).join(" ");
+    expect(feed).toMatch(/media_send/);
+    expect(feed).toMatch(/as a link/);
   });
 });
 

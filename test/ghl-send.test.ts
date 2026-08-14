@@ -147,7 +147,9 @@ describe("latestConversationChannel — fallbacks", () => {
     }
   });
   it("defaults to SMS when there is no conversation or no usable type", async () => {
-    expect(await client(withConvs([])).latestConversationChannel("L1", "C1")).toBe("SMS");
+    // No conversation at all = a widget visitor, not an SMS lead. Guessing
+    // SMS here texts someone sitting on a web page.
+    expect(await client(withConvs([])).latestConversationChannel("L1", "C1")).toBeNull();
     expect(await client(withConvs([{ id: "c1" }])).latestConversationChannel("L1", "C1")).toBe("SMS");
     expect(
       await client(withConvs([{ id: "c1", lastMessageType: "TYPE_ACTIVITY_CONTACT" }]))

@@ -158,8 +158,13 @@ export function createGhlClient(opts: GhlClientOptions) {
      * channel (a contact who has never written), then the thread's declared
      * type, then SMS. A wrong-but-plausible channel is worse than the
      * fallback, and every account has SMS.
+     *
+     * Returns NULL when the contact has no conversation at all — which is every
+     * chat-widget visitor, since the widget creates a bare contact and keeps
+     * the conversation on Assistable's side. Guessing SMS there texts someone
+     * who is sitting on a web page, so the caller degrades to a link instead.
      */
-    async latestConversationChannel(locationId: string, contactId: string): Promise<string> {
+    async latestConversationChannel(locationId: string, contactId: string): Promise<string | null> {
       try {
         const r = await get(
           `/conversations/search?locationId=${encodeURIComponent(locationId)}&contactId=${encodeURIComponent(contactId)}&sortBy=last_message_date&sort=desc`
@@ -167,7 +172,7 @@ export function createGhlClient(opts: GhlClientOptions) {
         if (!r.ok) return "SMS";
         const convs = (Array.isArray(r.json?.conversations) ? r.json.conversations : []) as
           Array<{ id: string; lastMessageType?: string; type?: string }>;
-        if (convs.length === 0) return "SMS";
+        if (convs.length === 0) return null;
 
         let bestInbound: { at: string; channel: string } | null = null;
         let bestAny: { at: string; channel: string } | null = null;
