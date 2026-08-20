@@ -342,6 +342,18 @@ describe("reactions are recognised and ignored", () => {
     )).toBe(true);
   });
 
+  it("names the ignored type, because this is the branch that silently drops a message", () => {
+    // A real attachment misfiled as a reaction looks identical to a thumbs-up
+    // on the dashboard unless the type is in the event.
+    return (async () => {
+      const { deps } = make("2026-07-23T10:00:00Z", [reactionMsg("r1")]);
+      deps.state.set("t1", "2026-07-23T09:00:00Z");
+      await runWakerCycle(deps as never, tenant);
+      const detect = deps.events.latest("t1", 10).find((e) => e.detail.includes("reactions=1"));
+      expect(detect?.detail).toMatch(/types=/);
+    })();
+  });
+
   it("still wakes on a burst that mixes an attachment with a reaction", async () => {
     // The photo is the whole point of the bridge; a reaction alongside it must
     // not suppress reading it.

@@ -157,10 +157,21 @@ export async function runWakerCycle(deps: WakerDeps, tenant: Tenant): Promise<{ 
       const fresh = all.filter((m) => classifyEmptyInbound(m) === "media");
       const reactions = all.length - fresh.length;
       if (reactions > 0) {
+        const ignored: string[] = [];
         for (const m of all) {
-          if (classifyEmptyInbound(m) !== "media") deps.processed.add(tenant.id, `waker:${m.id}`);
+          if (classifyEmptyInbound(m) !== "media") {
+            deps.processed.add(tenant.id, `waker:${m.id}`);
+            ignored.push(m.type ?? "none");
+          }
         }
-        deps.events.record(tenant.id, "detect", `conv=${conv.id} reactions=${reactions} (ignored)`);
+        // Name the types here too, not just on the media branch. This is the
+        // decision that SILENTLY drops a message, so "we ignored one" without
+        // saying what it was is unanswerable from the dashboard — a real
+        // attachment misfiled as a reaction looks identical to a thumbs-up.
+        const types = [...new Set(ignored)].join("/");
+        deps.events.record(
+          tenant.id, "detect", `conv=${conv.id} reactions=${reactions} types=${types} (ignored)`
+        );
       }
       if (fresh.length > 0) {
         // Record the raw v3 `type` values too. Which type a real channel
