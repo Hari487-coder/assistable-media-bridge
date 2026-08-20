@@ -96,15 +96,23 @@ export function classifyEmptyInbound(m: { type?: string | null }): "media" | "am
  */
 async function hasFreshAttachments(
   deps: WakerDeps, tenant: Tenant, contactId: string | null
-): Promise<boolean> {
-  if (!contactId) return true;
+): Promise<{ media: boolean; why: string }> {
+  // Both fail-open paths previously returned a bare `true`, so the feed printed
+  // "attachments found" for three cases that are not the same thing: we
+  // checked and found one, we could not check, and the check errored. Say which.
+  if (!contactId) return { media: true, why: "no contactId on conversation, assuming media" };
   try {
     const msgs = await deps.ghl.latestMediaMessages({
       locationId: tenant.locationId, contactId, limit: 5,
     });
-    return msgs.length > 0;
-  } catch {
-    return true;
+    return msgs.length > 0
+      ? { media: true, why: `attachments found (${msgs.length})` }
+      : { media: false, why: "no attachments on contact" };
+  } catch (err) {
+    return {
+      media: true,
+      why: `attachment lookup failed (${err instanceof Error ? err.message : "unknown"}), assuming media`,
+    };
   }
 }
 
@@ -129,7 +137,13 @@ async function hasFreshAttachments(
 async function buildWakeInstruction(
   deps: WakerDeps, tenant: Tenant, contactId: string | null
 ): Promise<string> {
-  if (!contactId) return WAKE_INSTRUCTION;
+  if (!contactId) {
+    deps.events.record(
+      tenant.id, "error",
+      "pre-read skipped: conversation has no contactId, falling back to asking for the tool"
+    );
+    return WAKE_INSTRUCTION;
+  }
   try {
     const { text } = await analyzeForContact(
       {
@@ -146,7 +160,10 @@ async function buildWakeInstruction(
     // than throwing. Handing the model "[attachment could not be read]" is
     // still better than asking for a tool call it will not make — it at least
     // knows not to pretend it heard something.
-    if (!text.trim()) return WAKE_INSTRUCTION;
+    if (!text.trim()) {
+      deps.events.record(tenant.id, "error", "pre-read returned nothing, falling back to the tool");
+      return WAKE_INSTRUCTION;
+    }
     deps.events.record(tenant.id, "tool_call", `pre-read for wake (contact ${contactId})`);
     return (
       "[media-mcp] The contact just sent an attachment. This is what it contains:\n\n" +
@@ -155,7 +172,11 @@ async function buildWakeInstruction(
       "or technical process, do not say you cannot open attachments, and do not ask them " +
       "to repeat themselves."
     );
-  } catch {
+  } catch (err) {
+    deps.events.record(
+      tenant.id, "error",
+      `pre-read failed (${err instanceof Error ? err.message : "unknown"}), falling back to the tool`
+    );
     return WAKE_INSTRUCTION;
   }
 }
@@ -256,17 +277,18 @@ export async function runWakerCycle(deps: WakerDeps, tenant: Tenant): Promise<{ 
       let fresh = certain;
       if (ambiguous.length > 0) {
         const types = [...new Set(ambiguous.map((m) => m.type ?? "none"))].join("/");
-        if (await hasFreshAttachments(deps, tenant, conv.contactId)) {
+        const check = await hasFreshAttachments(deps, tenant, conv.contactId);
+        if (check.media) {
           fresh = all;
           deps.events.record(
             tenant.id, "detect",
-            `conv=${conv.id} ambiguous=${ambiguous.length} types=${types} → attachments found, treating as media`
+            `conv=${conv.id} ambiguous=${ambiguous.length} types=${types} → ${check.why}, treating as media`
           );
         } else {
           for (const m of ambiguous) deps.processed.add(tenant.id, `waker:${m.id}`);
           deps.events.record(
             tenant.id, "detect",
-            `conv=${conv.id} reactions=${ambiguous.length} types=${types} (ignored, no attachments on contact)`
+            `conv=${conv.id} reactions=${ambiguous.length} types=${types} (ignored, ${check.why})`
           );
         }
       }
