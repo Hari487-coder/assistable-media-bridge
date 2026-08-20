@@ -22,7 +22,7 @@ const msg = (id: string, over: Partial<{ content: string | null; ai: boolean; so
 function make(
   convUpdatedAt: string,
   messages: ReturnType<typeof msg>[],
-  opts: { assignOk?: boolean } = {}
+  opts: { assignOk?: boolean; contactHasAttachments?: boolean } = {}
 ) {
   const db = openDb(":memory:");
   const wakes: Array<{ assistantId: string; conversationId: string; additionalInstructions: string }> = [];
@@ -41,11 +41,29 @@ function make(
           : { ok: true as const };
       },
     },
+    // The CRM is the authority on whether an attachment exists; the waker only
+    // consults it when a message type is unreadable.
+    ghl: {
+      latestMediaMessages: async () =>
+        (opts.contactHasAttachments
+          ? [{ id: "g1", convId: "c1", attachments: ["https://storage.msgsndr.com/a.ogg"], direction: "inbound", dateAdded: "t" }]
+          : []),
+    },
     processed: createProcessedStore(db),
     events: createEventStore(db),
     state: new Map<string, string>(),
   };
   return { deps, wakes, assigns };
+}
+
+/** Wall-clock sleeps assume the event loop delivers N ticks in M ms, which it
+ *  does not under parallel test load — these assertions failed at exactly the
+ *  boundary. Wait for the condition instead. */
+async function until(cond: () => boolean, timeoutMs = 3000) {
+  const deadline = Date.now() + timeoutMs;
+  while (!cond() && Date.now() < deadline) {
+    await new Promise((res) => setTimeout(res, 5));
+  }
 }
 
 describe("runWakerCycle", () => {
@@ -317,7 +335,7 @@ describe("reactions are recognised and ignored", () => {
     for (const t of ["IMAGE", "AUDIO", "FILE", "VIDEO", "image", "audio"]) {
       expect(classifyEmptyInbound({ type: t })).toBe("media");
     }
-    expect(classifyEmptyInbound({ type: "TEXT" })).toBe("reaction");
+    expect(classifyEmptyInbound({ type: "TEXT" })).toBe("ambiguous");
   });
 
   it("never wakes the assistant for a reaction", async () => {
@@ -340,6 +358,36 @@ describe("reactions are recognised and ignored", () => {
     expect(deps.events.latest("t1", 10).some(
       (e) => e.detail.includes("reactions=1") && e.detail.includes("ignored")
     )).toBe(true);
+  });
+
+  it("wakes on an unreadable type when the contact really does have an attachment", async () => {
+    // The live bug (account Dalmata, 2026-08-21): a WhatsApp VOICE NOTE arrived
+    // carrying type TEXT, was called a reaction, and was dropped in silence. The
+    // type is not evidence either way — the CRM is.
+    const withTool = { ...tenant, toolId: "tool-1" } as Tenant;
+    const { deps, wakes } = make("2026-07-23T10:00:00Z", [reactionMsg("v1")], {
+      contactHasAttachments: true,
+    });
+    deps.state.set("t1", "2026-07-23T09:00:00Z");
+    const r = await runWakerCycle(deps as never, withTool);
+
+    expect(r.woken).toBe(1);
+    expect(wakes).toHaveLength(1);
+    expect(deps.events.latest("t1", 10).some(
+      (e) => e.detail.includes("attachments found")
+    )).toBe(true);
+  });
+
+  it("wakes rather than drops when the attachment lookup fails", async () => {
+    // Failing closed loses a customer's voice note silently. Failing open costs
+    // one wake where the tool reports it found nothing.
+    const withTool = { ...tenant, toolId: "tool-1" } as Tenant;
+    const { deps, wakes } = make("2026-07-23T10:00:00Z", [reactionMsg("v1")]);
+    deps.ghl.latestMediaMessages = async () => { throw new Error("ghl down"); };
+    deps.state.set("t1", "2026-07-23T09:00:00Z");
+    await runWakerCycle(deps as never, withTool);
+
+    expect(wakes).toHaveLength(1);
   });
 
   it("names the ignored type, because this is the branch that silently drops a message", () => {
@@ -418,7 +466,7 @@ describe("revoked key does not poll forever", () => {
       2,
       { onAuthFailures: p.onAuthFailures, authFailureLimit: 3, onOverrun: () => {} }
     );
-    await new Promise((res) => setTimeout(res, 60));
+    await until(() => p.calls.length > 0);
     handle.stop();
     expect(p.calls.length).toBeGreaterThan(0);
     expect(p.calls[0]).toMatchObject({ id: "t1", consecutive: 3 });
@@ -452,9 +500,9 @@ describe("revoked key does not poll forever", () => {
       2,
       { onAuthFailures: p.onAuthFailures, authFailureLimit: 3, onOverrun: () => {} }
     );
-    await new Promise((res) => setTimeout(res, 90));
+    await until(() => n >= 9);
     handle.stop();
-    expect(n).toBeGreaterThan(5); // it really did keep polling
+    expect(n).toBeGreaterThanOrEqual(9); // it really did keep polling
     expect(p.calls).toHaveLength(0);
   });
 

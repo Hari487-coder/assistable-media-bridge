@@ -1,3 +1,4 @@
+import type { GhlClient } from "../clients/ghl";
 import type { V3Client } from "../clients/v3";
 import type { EventStore } from "../store/events";
 import type { ProcessedStore } from "../store/processed";
@@ -8,6 +9,9 @@ export type WakerState = Map<string, string>;
 
 export interface WakerDeps {
   v3: Pick<V3Client, "listConversations" | "listMessages" | "chatCompletion" | "assignTool">;
+  /** Only consulted for empty messages whose type is ambiguous — see
+   *  hasFreshAttachments. */
+  ghl: Pick<GhlClient, "latestMediaMessages">;
   processed: ProcessedStore;
   events: EventStore;
   state: WakerState;
@@ -61,10 +65,42 @@ const MEDIA_TYPES = new Set(["IMAGE", "AUDIO", "FILE", "VIDEO"]);
  * When `type` is absent we assume media, since that is how every such message
  * was treated before this existed — an unknown type must never silently
  * downgrade a working voice-note wake into something we skip.
+ *
+ * "ambiguous" is a type we cannot read either way. It is NOT proof of a
+ * reaction: MessageType has no REACTION member, and nothing in the platform
+ * assigns IMAGE/AUDIO/FILE/VIDEO, so a real voice note can arrive carrying a
+ * non-media type. Treating that as a reaction dropped a live customer's voice
+ * note silently (account Dalmata, 2026-08-21). The caller resolves ambiguity by
+ * asking the CRM whether attachments actually exist, which is the only
+ * authoritative answer available.
  */
-export function classifyEmptyInbound(m: { type?: string | null }): "media" | "reaction" {
+export function classifyEmptyInbound(m: { type?: string | null }): "media" | "ambiguous" {
   if (!m.type) return "media";
-  return MEDIA_TYPES.has(m.type.toUpperCase()) ? "media" : "reaction";
+  return MEDIA_TYPES.has(m.type.toUpperCase()) ? "media" : "ambiguous";
+}
+
+/**
+ * Does this contact actually have an inbound attachment right now?
+ *
+ * The waker sees v3 messages, which do not expose attachments, so a body-less
+ * message is unreadable from that side alone. The CRM does expose them, and it
+ * is the same source analyze_attachment reads, so its answer is the one that
+ * matters. Fails OPEN: if the lookup breaks we wake anyway, because a missed
+ * voice note is a silent customer-facing failure while an unnecessary wake just
+ * makes the tool report it found nothing.
+ */
+async function hasFreshAttachments(
+  deps: WakerDeps, tenant: Tenant, contactId: string | null
+): Promise<boolean> {
+  if (!contactId) return true;
+  try {
+    const msgs = await deps.ghl.latestMediaMessages({
+      locationId: tenant.locationId, contactId, limit: 5,
+    });
+    return msgs.length > 0;
+  } catch {
+    return true;
+  }
 }
 
 // Provisioning attaches analyze_attachment to the ONE assistant chosen at
@@ -154,24 +190,28 @@ export async function runWakerCycle(deps: WakerDeps, tenant: Tenant): Promise<{ 
       // Reactions never wake the assistant. They are still marked processed, or
       // every cycle would re-detect the same thumbs-up forever. A burst mixing
       // both (a photo then a reaction) still wakes on the photo.
-      const fresh = all.filter((m) => classifyEmptyInbound(m) === "media");
-      const reactions = all.length - fresh.length;
-      if (reactions > 0) {
-        const ignored: string[] = [];
-        for (const m of all) {
-          if (classifyEmptyInbound(m) !== "media") {
-            deps.processed.add(tenant.id, `waker:${m.id}`);
-            ignored.push(m.type ?? "none");
-          }
+      const certain = all.filter((m) => classifyEmptyInbound(m) === "media");
+      const ambiguous = all.filter((m) => classifyEmptyInbound(m) !== "media");
+
+      // An unreadable type is not evidence of a reaction, so ask the CRM
+      // whether this contact actually has an attachment waiting. Only reached
+      // when something is ambiguous, so the extra call is rare.
+      let fresh = certain;
+      if (ambiguous.length > 0) {
+        const types = [...new Set(ambiguous.map((m) => m.type ?? "none"))].join("/");
+        if (await hasFreshAttachments(deps, tenant, conv.contactId)) {
+          fresh = all;
+          deps.events.record(
+            tenant.id, "detect",
+            `conv=${conv.id} ambiguous=${ambiguous.length} types=${types} → attachments found, treating as media`
+          );
+        } else {
+          for (const m of ambiguous) deps.processed.add(tenant.id, `waker:${m.id}`);
+          deps.events.record(
+            tenant.id, "detect",
+            `conv=${conv.id} reactions=${ambiguous.length} types=${types} (ignored, no attachments on contact)`
+          );
         }
-        // Name the types here too, not just on the media branch. This is the
-        // decision that SILENTLY drops a message, so "we ignored one" without
-        // saying what it was is unanswerable from the dashboard — a real
-        // attachment misfiled as a reaction looks identical to a thumbs-up.
-        const types = [...new Set(ignored)].join("/");
-        deps.events.record(
-          tenant.id, "detect", `conv=${conv.id} reactions=${reactions} types=${types} (ignored)`
-        );
       }
       if (fresh.length > 0) {
         // Record the raw v3 `type` values too. Which type a real channel
