@@ -114,6 +114,8 @@ describe("mock-mode e2e", () => {
     const health = await request(app).get("/health");
     expect(health.status).toBe(200);
     expect(health.body.mock).toBe(false);
+    // Tells you which build is serving without guessing from behaviour.
+    expect(typeof health.body.build).toBe("string");
 
     // tool route is mounted in real mode; unknown token short-circuits to 404
     // BEFORE any real client call, so this exercises real-mode wiring w/o network

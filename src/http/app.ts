@@ -43,7 +43,13 @@ export function buildApp(config: AppConfig) {
   const app = express();
   app.use(express.json({ limit: "1mb" }));
   app.use(express.urlencoded({ extended: false }));
-  app.get("/health", (_req, res) => { res.json({ ok: true, mock: config.mock }); });
+  // Which build is actually serving. Three times in one day we had to infer
+  // "is my fix deployed yet?" from the SHAPE of the activity feed, and once got
+  // it wrong. Render injects RENDER_GIT_COMMIT; anywhere else this is "dev".
+  const build = process.env.RENDER_GIT_COMMIT?.slice(0, 7) ?? "dev";
+  app.get("/health", (_req, res) => {
+    res.json({ ok: true, mock: config.mock, build });
+  });
   app.use(createToolRouter({
     tenants, processed, events,
     ghlFactory: ghlFor, providerFactory: providerFor, mediaFetch, mediaLookup,
