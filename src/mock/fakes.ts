@@ -5,6 +5,8 @@ const OGG = new Uint8Array([...new TextEncoder().encode("OggS"), 0, 1, 2, 3]);
 export function createMockState() {
   let convUpdatedAt = "2026-07-23T10:00:00Z";
   const wokenConversations = new Set<string>();
+  /** The instruction the assistant actually received on its last wake. */
+  const wakeInstructions: string[] = [];
   /** Every outbound media send the mock accepted, so MOCK_MODE and the e2e can
    *  assert what would actually have reached the contact. */
   const sentMessages: Array<{ contactId: string; type: string; message?: string; attachments: string[] }> = [];
@@ -13,6 +15,7 @@ export function createMockState() {
   ];
   return {
     wokenConversations,
+    wakeInstructions,
     sentMessages,
     bumpConversation() { convUpdatedAt = "2026-07-23T11:00:00Z"; },
     v3Factory: () => ({
@@ -28,8 +31,9 @@ export function createMockState() {
           assistant: { id: "mock-asst-1" } },
       ],
       listMessages: async () => mediaMessages,
-      chatCompletion: async (a: { conversationId: string }) => {
+      chatCompletion: async (a: { conversationId: string; additionalInstructions?: string }) => {
         wokenConversations.add(a.conversationId);
+        wakeInstructions.push(a.additionalInstructions ?? "");
         return { ok: true as const };
       },
     }),

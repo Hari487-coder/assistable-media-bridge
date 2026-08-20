@@ -1,17 +1,22 @@
 import type { GhlClient } from "../clients/ghl";
+import type { MediaProvider } from "../providers";
 import type { V3Client } from "../clients/v3";
 import type { EventStore } from "../store/events";
 import type { ProcessedStore } from "../store/processed";
 import type { Tenant } from "../store/tenants";
+import { analyzeForContact } from "./analyze";
 import { mapLimit } from "./concurrency";
 
 export type WakerState = Map<string, string>;
 
 export interface WakerDeps {
   v3: Pick<V3Client, "listConversations" | "listMessages" | "chatCompletion" | "assignTool">;
-  /** Only consulted for empty messages whose type is ambiguous — see
-   *  hasFreshAttachments. */
+  /** Consulted to resolve an ambiguous type, and to READ the media before
+   *  waking — see the note on buildWakeInstruction. */
   ghl: Pick<GhlClient, "latestMediaMessages">;
+  provider: MediaProvider;
+  fetchImpl?: typeof fetch;
+  lookupImpl?: Parameters<typeof analyzeForContact>[0]["lookupImpl"];
   processed: ProcessedStore;
   events: EventStore;
   state: WakerState;
@@ -100,6 +105,58 @@ async function hasFreshAttachments(
     return msgs.length > 0;
   } catch {
     return true;
+  }
+}
+
+/**
+ * What we tell the assistant when we wake it.
+ *
+ * Asking it to CALL analyze_attachment is unreliable, and not because of the
+ * prompt. A media-only message has no content, so agent-run drops it from the
+ * history entirely; the tail is then the assistant's own last message, and
+ * ensureRespondableTail appends a synthetic user turn reading "Send your next
+ * follow-up message to the contact now... Output ONLY the message text". That
+ * is the FINAL user turn, it instructs the model not to use tools, and it beats
+ * anything we put in the system prompt. Observed live (account Dalmata,
+ * 2026-08-21): three voice notes, three correct wakes, zero tool calls, and an
+ * assistant that just continued its qualification script.
+ *
+ * So we read the media ourselves and hand over the content. The model then has
+ * nothing to decide — answering IS the follow-up message it was told to write.
+ * Falls back to asking for the tool if reading fails, which is no worse than
+ * the old behaviour.
+ */
+async function buildWakeInstruction(
+  deps: WakerDeps, tenant: Tenant, contactId: string | null
+): Promise<string> {
+  if (!contactId) return WAKE_INSTRUCTION;
+  try {
+    const { text } = await analyzeForContact(
+      {
+        ghl: deps.ghl as Parameters<typeof analyzeForContact>[0]["ghl"],
+        processed: deps.processed,
+        events: deps.events,
+        provider: deps.provider,
+        ...(deps.fetchImpl ? { fetchImpl: deps.fetchImpl } : {}),
+        ...(deps.lookupImpl ? { lookupImpl: deps.lookupImpl } : {}),
+      },
+      tenant, contactId
+    );
+    // Every failure path in analyzeForContact returns a bracketed note rather
+    // than throwing. Handing the model "[attachment could not be read]" is
+    // still better than asking for a tool call it will not make — it at least
+    // knows not to pretend it heard something.
+    if (!text.trim()) return WAKE_INSTRUCTION;
+    deps.events.record(tenant.id, "tool_call", `pre-read for wake (contact ${contactId})`);
+    return (
+      "[media-mcp] The contact just sent an attachment. This is what it contains:\n\n" +
+      `${text}\n\n` +
+      "Reply to the contact about this now, in their language. Do not mention any tool " +
+      "or technical process, do not say you cannot open attachments, and do not ask them " +
+      "to repeat themselves."
+    );
+  } catch {
+    return WAKE_INSTRUCTION;
   }
 }
 
@@ -224,8 +281,9 @@ export async function runWakerCycle(deps: WakerDeps, tenant: Tenant): Promise<{ 
         );
         const assistantId = conv.assistant?.id ?? tenant.assistantId;
         await ensureToolAssigned(deps, tenant, assistantId);
+        const instruction = await buildWakeInstruction(deps, tenant, conv.contactId);
         const r = await deps.v3.chatCompletion({
-          assistantId, conversationId: conv.id, additionalInstructions: WAKE_INSTRUCTION,
+          assistantId, conversationId: conv.id, additionalInstructions: instruction,
         });
         // Mark AFTER the attempt (not before): mark-before permanently loses
         // the wake if chatCompletion throws. On ok:false we still mark to

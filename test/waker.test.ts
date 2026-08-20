@@ -43,6 +43,12 @@ function make(
     },
     // The CRM is the authority on whether an attachment exists; the waker only
     // consults it when a message type is unreadable.
+    provider: {
+      describe: async () => "hola, quiero saber si tienen departamentos en Ñuñoa",
+      validateKey: async () => ({ ok: true as const }),
+    },
+    fetchImpl: (async () => new Response(new TextEncoder().encode("OggS....."))) as unknown as typeof fetch,
+    lookupImpl: async () => [{ address: "93.184.216.34", family: 4 }],
     ghl: {
       latestMediaMessages: async () =>
         (opts.contactHasAttachments
@@ -378,6 +384,26 @@ describe("reactions are recognised and ignored", () => {
     )).toBe(true);
   });
 
+  it("hands the assistant the transcript, not an instruction to fetch it", async () => {
+    // Live (Dalmata, 2026-08-21): three voice notes, three correct wakes, zero
+    // tool calls. A media-only message has no content, so agent-run drops it
+    // from history, ensureRespondableTail appends "Output ONLY the message
+    // text", and that final user turn beats any system-prompt request to call a
+    // tool. Reading it ourselves removes the decision entirely.
+    const withTool = { ...tenant, toolId: "tool-1" } as Tenant;
+    const { deps, wakes } = make("2026-07-23T10:00:00Z", [reactionMsg("v1")], {
+      contactHasAttachments: true,
+    });
+    deps.state.set("t1", "2026-07-23T09:00:00Z");
+    await runWakerCycle(deps as never, withTool);
+
+    expect(wakes).toHaveLength(1);
+    expect(wakes[0].additionalInstructions).toContain("departamentos en Ñuñoa");
+    expect(wakes[0].additionalInstructions).toMatch(/Reply to the contact/i);
+    // It must not ask for a tool call — that is the request the model ignores.
+    expect(wakes[0].additionalInstructions).not.toMatch(/call the analyze_attachment tool/i);
+  });
+
   it("wakes rather than drops when the attachment lookup fails", async () => {
     // Failing closed loses a customer's voice note silently. Failing open costs
     // one wake where the tool reports it found nothing.
@@ -411,7 +437,7 @@ describe("reactions are recognised and ignored", () => {
     const r = await runWakerCycle(deps as never, withTool);
 
     expect(r.woken).toBe(1);
-    expect(wakes[0].additionalInstructions).toBe(WAKE_INSTRUCTION);
+    expect(wakes[0].additionalInstructions).toContain("[media-mcp]");
     expect(assigns).toHaveLength(1);
     expect(deps.processed.has("t1", "waker:r1")).toBe(true);
   });
@@ -427,7 +453,7 @@ describe("reactions are recognised and ignored", () => {
     deps.state.set("t1", "2026-07-23T09:00:00Z");
     await runWakerCycle(deps as never, tenant);
     expect(wakes).toHaveLength(1);
-    expect(wakes[0].additionalInstructions).toBe(WAKE_INSTRUCTION);
+    expect(wakes[0].additionalInstructions).toContain("[media-mcp]");
   });
 });
 

@@ -30,12 +30,21 @@ describe("mock-mode e2e", () => {
     expect(r.woken).toBe(1);
     expect(wireDeps.mockV3State.wokenConversations.has("mock-conv-1")).toBe(true);
 
-    // 3. Tool call (what the woken assistant does next)
+    // 3. The wake carries the CONTENT, not a request to fetch it. A media-only
+    //    message is dropped from agent-run history, so the platform appends
+    //    "Output ONLY the message text" as the final user turn and the model
+    //    will not call a tool. Reading it here removes that dependency.
+    const instruction = wireDeps.mockV3State.wakeInstructions.at(-1) ?? "";
+    expect(instruction).toContain("Voice note transcript");
+    expect(instruction).toContain("hey, can I move my appointment to Friday?");
+
+    // 4. A later tool call correctly reports it was already read, rather than
+    //    re-billing the provider for the same attachment.
     const tool = await request(app).post(`/tool/${token}`).send({
       args: {}, meta_data: { contact_id: "mock-contact-1", location_id: "mock-loc-1" },
     });
     expect(tool.status).toBe(200);
-    expect(tool.body.result).toContain("Voice note transcript");
+    expect(tool.body.result).toMatch(/already read/i);
   });
 
   it("registers an asset and sends it, attachments and all, end to end", async () => {

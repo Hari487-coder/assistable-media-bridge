@@ -62,7 +62,10 @@ export function buildApp(config: AppConfig) {
   }));
 
   const wakerDepsFor = (t: Tenant): WakerDeps => ({
-    v3: v3For(t.v3Key, t.subAccountId), ghl: ghlFor(t), processed, events, state: wakerState,
+    v3: v3For(t.v3Key, t.subAccountId), ghl: ghlFor(t), provider: providerFor(t),
+    processed, events, state: wakerState,
+    ...(mediaFetch ? { fetchImpl: mediaFetch } : {}),
+    ...(mediaLookup ? { lookupImpl: mediaLookup } : {}),
     budgetMs: config.wakerBudgetMs,
   });
 
@@ -72,6 +75,7 @@ export function buildApp(config: AppConfig) {
       tenants, processed, events, wakerDepsFor,
       mockV3State: mock ?? {
         wokenConversations: new Set<string>(),
+        wakeInstructions: [] as string[],
         sentMessages: [] as Array<{ contactId: string; type: string; message?: string; attachments: string[] }>,
         bumpConversation() { /* noop outside mock mode */ },
       },
